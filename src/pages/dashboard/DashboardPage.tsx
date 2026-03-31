@@ -3,6 +3,7 @@ import {
   Alert,
   Badge,
   Box,
+  Button,
   Center,
   Checkbox,
   Container,
@@ -23,7 +24,7 @@ import { ReactNode, startTransition, useDeferredValue, useEffect, useMemo, useSt
 import classes from './DashboardPage.module.css';
 import { Chart } from '../visualizer/Chart.tsx';
 import { formatNumber } from '../../utils/format.ts';
-import { loadTutorialDataset } from '../../tutorial/loadTutorialDataset.ts';
+import { loadTutorialDataset, loadTutorialDatasetFromFiles, mergeTutorialDatasets } from '../../tutorial/loadTutorialDataset.ts';
 import { IndicatorKey, TradeClassification, TutorialDataset, TutorialProductData, TutorialSnapshot, TutorialTrade } from '../../tutorial/types.ts';
 
 const BID_COLORS = ['#6f94bf', '#355f90', '#153a63'];
@@ -464,8 +465,11 @@ function statCard(label: string, value: string, detail?: string): ReactNode {
 }
 
 export function DashboardPage(): ReactNode {
+  const [bundledDataset, setBundledDataset] = useState<TutorialDataset | null>(null);
   const [dataset, setDataset] = useState<TutorialDataset | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
   const [normalization, setNormalization] = useState<IndicatorKey>('none');
@@ -492,6 +496,7 @@ export function DashboardPage(): ReactNode {
           return;
         }
 
+        setBundledDataset(loadedDataset);
         setDataset(loadedDataset);
 
         const defaultSession = loadedDataset.sessions[loadedDataset.sessions.length - 1];
@@ -515,6 +520,52 @@ export function DashboardPage(): ReactNode {
       cancelled = true;
     };
   }, []);
+
+  async function handleAdditionalFiles(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0 || !dataset) {
+      return;
+    }
+
+    setUploadError(null);
+    setUploading(true);
+
+    try {
+      const uploadedDataset = await loadTutorialDatasetFromFiles([...files]);
+      const mergedDataset = mergeTutorialDatasets(dataset, uploadedDataset);
+      const newestSession = uploadedDataset.sessions[uploadedDataset.sessions.length - 1];
+      const defaultProduct = newestSession.productNames.includes('TOMATOES')
+        ? 'TOMATOES'
+        : newestSession.productNames[0];
+      const defaultProductData = newestSession.products[defaultProduct];
+
+      setDataset(mergedDataset);
+      setSelectedSessionId(newestSession.id);
+      setSelectedProduct(defaultProduct);
+      setQuantityRange([1, defaultProductData.maxTradeQuantity]);
+      setActiveTimestamp(defaultProductData.lastTimestamp);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Could not load the uploaded CSV files.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function resetToBundledDataset(): void {
+    if (!bundledDataset) {
+      return;
+    }
+
+    const defaultSession = bundledDataset.sessions[bundledDataset.sessions.length - 1];
+    const defaultProduct = defaultSession.productNames.includes('TOMATOES') ? 'TOMATOES' : defaultSession.productNames[0];
+    const defaultProductData = defaultSession.products[defaultProduct];
+
+    setUploadError(null);
+    setDataset(bundledDataset);
+    setSelectedSessionId(defaultSession.id);
+    setSelectedProduct(defaultProduct);
+    setQuantityRange([1, defaultProductData.maxTradeQuantity]);
+    setActiveTimestamp(defaultProductData.lastTimestamp);
+  }
 
   const selectedSession = useMemo(
     () => dataset?.sessions.find(session => session.id === selectedSessionId) ?? dataset?.sessions[0] ?? null,
@@ -789,8 +840,8 @@ export function DashboardPage(): ReactNode {
                 <Title className={classes.headline}>Tutorial order-book monitor rebuilt around the Hedgehogs dashboard.</Title>
                 <Text size="lg" className={classes.lede}>
                   The layout follows the README’s intent: a depth-over-time market plot, trade markers, normalization
-                  controls, and timestamp-synced detail panes. Where the tutorial CSVs do not expose positions or logs,
-                  the dashboard substitutes file PnL and inferred signed flow.
+                  controls, and timestamp-synced detail panes. The bundled tutorial sessions load by default, and you
+                  can add more `prices_*.csv` and `trades_*.csv` files in the same format without changing code.
                 </Text>
               </Box>
               <Stack gap="xs" align="flex-end">
@@ -812,6 +863,12 @@ export function DashboardPage(): ReactNode {
             panel is cumulative signed trade flow because these tutorial files do not include your own positions. `WallMid`
             follows the Hedgehogs FAQ idea and is inferred here from persistent high-volume bid and ask walls.
           </Alert>
+
+          {uploadError && (
+            <Alert color="red" variant="light" title="Upload failed">
+              {uploadError}
+            </Alert>
+          )}
 
           <Grid gutter="lg">
             <Grid.Col span={{ base: 12, lg: 8 }}>
@@ -852,6 +909,34 @@ export function DashboardPage(): ReactNode {
                 <Paper withBorder radius="xl" p="md" className={classes.panel}>
                   <Text className={classes.sectionLabel}>Controls</Text>
                   <Stack gap="md">
+                    <Stack gap="xs">
+                      <Text fw={600}>Data input</Text>
+                      <Group>
+                        <Button component="label" loading={uploading} variant="filled" color="marketBlue">
+                          Add price/trade CSVs
+                          <input
+                            hidden
+                            type="file"
+                            accept=".csv,text/csv"
+                            multiple
+                            onChange={event => {
+                              void handleAdditionalFiles(event.currentTarget.files);
+                              event.currentTarget.value = '';
+                            }}
+                          />
+                        </Button>
+                        <Button variant="light" color="gray" onClick={resetToBundledDataset} disabled={!bundledDataset}>
+                          Reset to tutorial
+                        </Button>
+                      </Group>
+                      <Text size="sm" className={classes.subtle}>
+                        Pairing is based on filenames like `prices_round_1_day_0.csv` and `trades_round_1_day_0.csv`.
+                        If a trades file is missing, the session still loads with an empty trade tape.
+                      </Text>
+                    </Stack>
+
+                    <Divider />
+
                     <Select
                       label="Session"
                       value={selectedSession.id}

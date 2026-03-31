@@ -27,7 +27,7 @@ interface RawTradeRow {
   quantity: number;
 }
 
-interface SessionFileSet {
+export interface SessionFileSet {
   id: string;
   label: string;
   priceFile: string;
