@@ -6,15 +6,16 @@ import { createTheme, MantineProvider } from '@mantine/core';
 import { ReactNode } from 'react';
 import { createBrowserRouter, createRoutesFromElements, Navigate, Route, RouterProvider } from 'react-router-dom';
 import { BasePage } from './pages/base/BasePage.tsx';
-import { HomePage } from './pages/home/HomePage.tsx';
-import { VisualizerPage } from './pages/visualizer/VisualizerPage.tsx';
+import { DashboardPage } from './pages/dashboard/DashboardPage.tsx';
 import { useStore } from './store.ts';
 
 const theme = createTheme({
+  primaryColor: 'marketBlue',
+  fontFamily: '"IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif',
+  headings: {
+    fontFamily: '"Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif',
+  },
   colors: {
-    // Mantine 7.3.0 changes the dark colors to be more slightly lighter than they used to be
-    // See https://mantine.dev/changelog/7-3-0/#improved-dark-color-scheme-colors for more information
-    // The old dark colors offer better contrast between default text and background colors
     dark: [
       '#C1C2C5',
       '#A6A7AB',
@@ -27,19 +28,21 @@ const theme = createTheme({
       '#141517',
       '#101113',
     ],
+    marketBlue: ['#eef5fb', '#d7e8f7', '#b7d2ea', '#95bbdd', '#749fcd', '#5685bc', '#3a6d9f', '#27567e', '#183d5d', '#0b243b'],
+    marketRed: ['#fdf0ec', '#f8d8d0', '#f0b9ac', '#e79787', '#dc7462', '#cf5543', '#af3b2c', '#8c2e20', '#672016', '#45120d'],
+    brass: ['#fcf6e8', '#f7ead0', '#efd6a1', '#e6c272', '#ddaf49', '#d29e31', '#b9851f', '#8f6714', '#66470c', '#3f2a05'],
   },
 });
 
 const router = createBrowserRouter(
   createRoutesFromElements(
     <Route path="/" element={<BasePage />}>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/visualizer" element={<VisualizerPage />} />
+      <Route path="/" element={<DashboardPage />} />
       <Route path="*" element={<Navigate to="/" />} />
     </Route>,
   ),
   {
-    basename: '/imc-prosperity-3-visualizer/',
+    basename: import.meta.env.BASE_URL,
   },
 );
 

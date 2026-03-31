@@ -1,42 +1,45 @@
 .header {
-  height: rem(56px);
-  margin-bottom: var(--mantine-spacing-md);
-  background-color: var(--mantine-color-body);
-  border-bottom: rem(1px) solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: rem(74px);
+  margin-bottom: var(--mantine-spacing-lg);
+  border-bottom: rem(1px) solid light-dark(rgba(25, 43, 68, 0.08), rgba(255, 255, 255, 0.08));
+  background: light-dark(rgba(250, 246, 239, 0.88), rgba(10, 14, 20, 0.84));
+  backdrop-filter: blur(rem(16px));
 }
 
 .inner {
-  height: rem(56px);
+  height: rem(74px);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.link {
-  display: block;
-  line-height: 1;
-  padding: rem(8px) rem(12px);
-  border-radius: var(--mantine-radius-sm);
-  text-decoration: none;
-  color: light-dark(var(--mantine-color-gray-7), var(--mantine-color-dark-0));
-  font-size: var(--mantine-font-size-sm);
-  font-weight: 500;
-
-  @mixin hover {
-    background-color: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
-  }
-
-  [data-mantine-color-scheme] &[data-active] {
-    background-color: var(--mantine-color-blue-filled);
-    color: var(--mantine-color-white);
-  }
+.brandMark {
+  width: rem(42px);
+  height: rem(42px);
+  display: grid;
+  place-items: center;
+  border-radius: rem(12px);
+  color: light-dark(#183d5d, #d5e8ff);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(222, 233, 245, 0.98));
+  border: rem(1px) solid light-dark(rgba(25, 43, 68, 0.08), rgba(255, 255, 255, 0.08));
 }
 
-.linkDisabled {
-  cursor: not-allowed;
+[data-mantine-color-scheme='dark'] .brandMark {
+  color: #d5e8ff;
+  background: linear-gradient(135deg, rgba(35, 53, 74, 0.96), rgba(18, 30, 44, 0.94));
 }
 
-.icon {
-  vertical-align: top;
-  padding-right: rem(2px);
+.title {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
+  font-size: rem(27px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.subtitle {
+  font-size: rem(13px);
+  color: light-dark(#697689, #9ca9ba);
 }
