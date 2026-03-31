@@ -43,3 +43,8 @@
   font-size: rem(13px);
   color: light-dark(#697689, #9ca9ba);
 }
+
+.navButton {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
