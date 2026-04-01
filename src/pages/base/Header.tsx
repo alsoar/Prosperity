@@ -7,9 +7,12 @@ import classes from './Header.module.css';
 export function Header(): ReactNode {
   const { pathname } = useLocation();
   const isArchetypesPage = pathname.includes('/round-1-archetypes');
+  const isStrategyPage = pathname.includes('/strategy-viewer') || pathname.includes('/visualizer');
 
   const subtitle = isArchetypesPage
     ? 'Prosperity 3 Round 1 latent actor board'
+    : isStrategyPage
+    ? 'Upload and inspect Prosperity strategy logs'
     : 'Hedgehogs-style tutorial market dashboard';
 
   const badges = isArchetypesPage
@@ -17,6 +20,12 @@ export function Header(): ReactNode {
         { label: 'Archetypes', color: 'brass' },
         { label: 'Conviction', color: 'marketBlue' },
         { label: 'Natural Language', color: 'marketRed' },
+      ]
+    : isStrategyPage
+    ? [
+        { label: 'Strategy Logs', color: 'brass' },
+        { label: 'PnL', color: 'marketBlue' },
+        { label: 'Orders', color: 'marketRed' },
       ]
     : [
         { label: 'Order Book', color: 'brass' },
@@ -42,7 +51,7 @@ export function Header(): ReactNode {
             <Button
               component={NavLink}
               to="/"
-              variant={isArchetypesPage ? 'subtle' : 'light'}
+              variant={!isArchetypesPage && !isStrategyPage ? 'light' : 'subtle'}
               color="marketBlue"
               radius="xl"
               size="compact-sm"
@@ -60,6 +69,17 @@ export function Header(): ReactNode {
               className={classes.navButton}
             >
               Round 1 Archetypes
+            </Button>
+            <Button
+              component={NavLink}
+              to="/strategy-viewer"
+              variant={isStrategyPage ? 'light' : 'subtle'}
+              color="marketRed"
+              radius="xl"
+              size="compact-sm"
+              className={classes.navButton}
+            >
+              Strategy Viewer
             </Button>
           </Group>
 

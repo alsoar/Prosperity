@@ -21,7 +21,7 @@ export function VisualizerPage(): ReactNode {
   const { search } = useLocation();
 
   if (algorithm === null) {
-    return <Navigate to={`/${search}`} />;
+    return <Navigate to={`/strategy-viewer${search}`} />;
   }
 
   const conversionProducts = new Set();

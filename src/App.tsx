@@ -8,6 +8,8 @@ import { createBrowserRouter, createRoutesFromElements, Navigate, Route, RouterP
 import { RoundOneArchetypesPage } from './pages/archetypes/RoundOneArchetypesPage.tsx';
 import { BasePage } from './pages/base/BasePage.tsx';
 import { DashboardPage } from './pages/dashboard/DashboardPage.tsx';
+import { HomePage } from './pages/home/HomePage.tsx';
+import { VisualizerPage } from './pages/visualizer/VisualizerPage.tsx';
 import { useStore } from './store.ts';
 
 const theme = createTheme({
@@ -40,6 +42,8 @@ const router = createBrowserRouter(
     <Route path="/" element={<BasePage />}>
       <Route path="/" element={<DashboardPage />} />
       <Route path="round-1-archetypes" element={<RoundOneArchetypesPage />} />
+      <Route path="strategy-viewer" element={<HomePage />} />
+      <Route path="visualizer" element={<VisualizerPage />} />
       <Route path="*" element={<Navigate to="/" />} />
     </Route>,
   ),
