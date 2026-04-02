@@ -1,4 +1,4 @@
-import { Anchor, Button, Code, Kbd, PasswordInput, Select, Text, TextInput } from '@mantine/core';
+import { Anchor, Button, Code, Kbd, PasswordInput, Text, TextInput } from '@mantine/core';
 import { AxiosResponse } from 'axios';
 import { FormEvent, ReactNode, useCallback, useState } from 'react';
 import { ErrorAlert } from '../../components/ErrorAlert.tsx';
@@ -6,7 +6,6 @@ import { useAsync } from '../../hooks/use-async.ts';
 import { AlgorithmSummary } from '../../models.ts';
 import { useStore } from '../../store.ts';
 import { authenticatedAxios } from '../../utils/axios.ts';
-import { formatTimestamp } from '../../utils/format.ts';
 import { AlgorithmList } from './AlgorithmList.tsx';
 import { HomeCard } from './HomeCard.tsx';
 
@@ -61,31 +60,12 @@ export function LoadFromProsperity(): ReactNode {
     (event?: FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
 
-      if (idToken.trim().length > 0) {
+      if (idToken.trim().length > 0 && round.trim().length > 0) {
         loadAlgorithms.call();
       }
     },
-    [loadAlgorithms],
+    [idToken, loadAlgorithms, round],
   );
-
-  const now = Date.now();
-  const rounds = [
-    { value: 'ROUND0', label: 'Tutorial', openFrom: '2025-02-24T11:00:00.000Z' },
-    { value: 'ROUND1', label: 'Round 1', openFrom: '2025-04-07T11:00:00.000Z' },
-    { value: 'ROUND2', label: 'Round 2', openFrom: '2025-04-10T11:00:00.000Z' },
-    { value: 'ROUND3', label: 'Round 3', openFrom: '2025-04-13T11:00:00.000Z' },
-    { value: 'ROUND4', label: 'Round 4', openFrom: '2025-04-16T11:00:00.000Z' },
-    { value: 'ROUND5', label: 'Round 5', openFrom: '2025-04-19T11:00:00.000Z' },
-  ].map(round => {
-    const disabled = Date.parse(round.openFrom) > now;
-    const label = disabled ? `${round.label} - Available from ${formatTimestamp(round.openFrom)}` : round.label;
-
-    return {
-      value: round.value,
-      label,
-      disabled,
-    };
-  });
 
   return (
     <HomeCard title="Load from Prosperity">
@@ -107,8 +87,8 @@ export function LoadFromProsperity(): ReactNode {
       <Text>
         The visualizer remembers the ID token for ease-of-use, but the token is only valid for a limited amount of time
         so you&apos;ll need to update this field often. Your ID token is only used to list your algorithms and to
-        download algorithm logs and results. The visualizer communicates directly with the API used by the Prosperity
-        website and never sends data to other servers.
+        download algorithm logs. The visualizer communicates directly with the API used by the Prosperity website and
+        never sends data to other servers.
       </Text>
       {/* prettier-ignore */}
       <Text>
@@ -127,12 +107,12 @@ export function LoadFromProsperity(): ReactNode {
           onInput={e => setIdToken((e.target as HTMLInputElement).value)}
         />
 
-        <Select
-          label="Round"
+        <TextInput
+          label="Round key"
+          description='Enter the Prosperity round identifier to query, for example "ROUND0" or "ROUND1".'
+          placeholder="ROUND0"
           value={round}
-          onChange={value => setRound(value!)}
-          data={rounds}
-          allowDeselect={false}
+          onInput={e => setRound((e.target as HTMLInputElement).value.toUpperCase())}
           mt="xs"
         />
 

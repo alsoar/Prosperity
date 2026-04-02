@@ -26,6 +26,9 @@ import { Chart } from '../visualizer/Chart.tsx';
 import { formatNumber } from '../../utils/format.ts';
 import { loadTutorialDataset, loadTutorialDatasetFromFiles, mergeTutorialDatasets } from '../../tutorial/loadTutorialDataset.ts';
 import { IndicatorKey, TradeClassification, TutorialDataset, TutorialProductData, TutorialSnapshot, TutorialTrade } from '../../tutorial/types.ts';
+import { buildStrategyDataset, StrategyDatasetResult, StrategyProductOverlay } from '../../tutorial/strategyDataset.ts';
+import { parseAlgorithmLogs } from '../../utils/algorithm.tsx';
+import { useStore } from '../../store.ts';
 
 const BID_COLORS = ['#6f94bf', '#355f90', '#153a63'];
 const ASK_COLORS = ['#d97966', '#bc553f', '#8f3424'];
@@ -55,7 +58,7 @@ function indicatorLabel(key: IndicatorKey): string {
 }
 
 interface MarketPointMeta {
-  kind: 'book' | 'trade' | 'indicator';
+  kind: 'book' | 'trade' | 'indicator' | 'strategy-order' | 'strategy-trade' | 'fill-match';
   label: string;
   price: number;
   timestamp: number;
@@ -63,6 +66,9 @@ interface MarketPointMeta {
   classification?: TradeClassification;
   referenceBid?: number | null;
   referenceAsk?: number | null;
+  side?: string;
+  counterpart?: string | null;
+  note?: string;
 }
 
 function formatSigned(value: number, decimals: number = 1): string {
@@ -149,6 +155,21 @@ function normalizeTradePrice(trade: TutorialTrade, key: IndicatorKey): number {
   return key === 'none' ? trade.price : trade.price - baselineForTrade(trade, key);
 }
 
+function normalizeAbsolutePriceAtTimestamp(
+  snapshots: TutorialSnapshot[],
+  timestamp: number,
+  price: number,
+  key: IndicatorKey,
+): number {
+  if (key === 'none') {
+    return price;
+  }
+
+  const snapshotIndex = findNearestSnapshotIndex(snapshots, timestamp);
+  const snapshot = snapshotIndex >= 0 ? snapshots[snapshotIndex] : null;
+  return snapshot ? price - baselineForSnapshot(snapshot, key) : price;
+}
+
 function downsampleSnapshots(snapshots: TutorialSnapshot[], step: number): TutorialSnapshot[] {
   if (step <= 1) {
     return snapshots;
@@ -169,6 +190,16 @@ function buildFlowSeries(snapshots: TutorialSnapshot[], trades: TutorialTrade[])
 
     return [snapshot.timestamp, runningFlow];
   });
+}
+
+function aggregateProfitLossByTimestamp(points: { timestamp: number; profitLoss: number }[]): [number, number][] {
+  const profitLossByTimestamp = new Map<number, number>();
+
+  points.forEach(point => {
+    profitLossByTimestamp.set(point.timestamp, (profitLossByTimestamp.get(point.timestamp) ?? 0) + point.profitLoss);
+  });
+
+  return [...profitLossByTimestamp.entries()].sort((left, right) => left[0] - right[0]);
 }
 
 function buildTooltip(snapshotMode: IndicatorKey) {
@@ -194,6 +225,18 @@ function buildTooltip(snapshotMode: IndicatorKey) {
 
     if (meta.classification) {
       parts.push(`<div>Class: ${meta.classification}</div>`);
+    }
+
+    if (meta.side) {
+      parts.push(`<div>Side: ${meta.side}</div>`);
+    }
+
+    if (meta.counterpart) {
+      parts.push(`<div>Counterparty: ${meta.counterpart}</div>`);
+    }
+
+    if (meta.note) {
+      parts.push(`<div>${meta.note}</div>`);
     }
 
     if (meta.referenceBid !== undefined || meta.referenceAsk !== undefined) {
@@ -379,6 +422,192 @@ function buildMarketSeries(
   return series;
 }
 
+function buildStrategySeries(
+  productData: TutorialProductData,
+  strategyOverlay: StrategyProductOverlay,
+  normalization: IndicatorKey,
+  showStrategyOrders: boolean,
+  showOwnFills: boolean,
+  showFillMatches: boolean,
+): Highcharts.SeriesOptionsType[] {
+  const series: Highcharts.SeriesOptionsType[] = [];
+
+  if (showStrategyOrders) {
+    const bidData = strategyOverlay.orderEvents
+      .filter(order => order.side === 'bid')
+      .map(order => ({
+        x: order.timestamp,
+        y: normalizeAbsolutePriceAtTimestamp(productData.snapshots, order.timestamp, order.price, normalization),
+        marker: {
+          radius: 3 + Math.min(order.quantity, 12) * 0.25,
+          symbol: 'triangle',
+        },
+        custom: {
+          kind: 'strategy-order',
+          label: 'Our bid',
+          price: order.price,
+          timestamp: order.timestamp,
+          quantity: order.quantity,
+          side: 'bid',
+        } satisfies MarketPointMeta,
+      }));
+
+    const askData = strategyOverlay.orderEvents
+      .filter(order => order.side === 'ask')
+      .map(order => ({
+        x: order.timestamp,
+        y: normalizeAbsolutePriceAtTimestamp(productData.snapshots, order.timestamp, order.price, normalization),
+        marker: {
+          radius: 3 + Math.min(order.quantity, 12) * 0.25,
+          symbol: 'triangle-down',
+        },
+        custom: {
+          kind: 'strategy-order',
+          label: 'Our ask',
+          price: order.price,
+          timestamp: order.timestamp,
+          quantity: order.quantity,
+          side: 'ask',
+        } satisfies MarketPointMeta,
+      }));
+
+    series.push(
+      {
+        type: 'scatter',
+        name: 'Our bids',
+        color: '#0f8a74',
+        data: bidData,
+        turboThreshold: 0,
+      },
+      {
+        type: 'scatter',
+        name: 'Our asks',
+        color: '#cf5c36',
+        data: askData,
+        turboThreshold: 0,
+      },
+    );
+  }
+
+  if (showOwnFills) {
+    const buyFills = strategyOverlay.ownTradeEvents
+      .filter(trade => trade.side === 'buy')
+      .map(trade => ({
+        x: trade.timestamp,
+        y: normalizeAbsolutePriceAtTimestamp(productData.snapshots, trade.timestamp, trade.price, normalization),
+        marker: {
+          radius: 4 + Math.min(trade.quantity, 12) * 0.25,
+          symbol: 'diamond',
+        },
+        custom: {
+          kind: 'strategy-trade',
+          label: 'Our buy fill',
+          price: trade.price,
+          timestamp: trade.timestamp,
+          quantity: trade.quantity,
+          side: trade.side,
+          counterpart: trade.counterpart,
+        } satisfies MarketPointMeta,
+      }));
+
+    const sellFills = strategyOverlay.ownTradeEvents
+      .filter(trade => trade.side === 'sell')
+      .map(trade => ({
+        x: trade.timestamp,
+        y: normalizeAbsolutePriceAtTimestamp(productData.snapshots, trade.timestamp, trade.price, normalization),
+        marker: {
+          radius: 4 + Math.min(trade.quantity, 12) * 0.25,
+          symbol: 'diamond',
+        },
+        custom: {
+          kind: 'strategy-trade',
+          label: 'Our sell fill',
+          price: trade.price,
+          timestamp: trade.timestamp,
+          quantity: trade.quantity,
+          side: trade.side,
+          counterpart: trade.counterpart,
+        } satisfies MarketPointMeta,
+      }));
+
+    const unknownFills = strategyOverlay.ownTradeEvents
+      .filter(trade => trade.side === 'unknown')
+      .map(trade => ({
+        x: trade.timestamp,
+        y: normalizeAbsolutePriceAtTimestamp(productData.snapshots, trade.timestamp, trade.price, normalization),
+        marker: {
+          radius: 4 + Math.min(trade.quantity, 12) * 0.25,
+          symbol: 'circle',
+        },
+        custom: {
+          kind: 'strategy-trade',
+          label: 'Our fill',
+          price: trade.price,
+          timestamp: trade.timestamp,
+          quantity: trade.quantity,
+          side: trade.side,
+          counterpart: trade.counterpart,
+          note: 'Side inferred with low confidence',
+        } satisfies MarketPointMeta,
+      }));
+
+    series.push(
+      {
+        type: 'scatter',
+        name: 'Our buy fills',
+        color: '#159a6f',
+        data: buyFills,
+        turboThreshold: 0,
+      },
+      {
+        type: 'scatter',
+        name: 'Our sell fills',
+        color: '#d94841',
+        data: sellFills,
+        turboThreshold: 0,
+      },
+      {
+        type: 'scatter',
+        name: 'Our fills (unclear side)',
+        color: '#8a7d6d',
+        data: unknownFills,
+        turboThreshold: 0,
+      },
+    );
+  }
+
+  if (showFillMatches) {
+    series.push({
+      type: 'scatter',
+      name: 'Trades that filled us',
+      color: '#7a5ccf',
+      data: strategyOverlay.fillMatchEvents.map(trade => ({
+        x: trade.timestamp,
+        y: normalizeAbsolutePriceAtTimestamp(productData.snapshots, trade.timestamp, trade.price, normalization),
+        marker: {
+          radius: 3 + Math.min(trade.quantity, 12) * 0.2,
+          symbol: 'square',
+        },
+        custom: {
+          kind: 'fill-match',
+          label: 'Fill-side market trade',
+          price: trade.price,
+          timestamp: trade.timestamp,
+          quantity: trade.quantity,
+          side: trade.side,
+          counterpart: trade.counterpart,
+        } satisfies MarketPointMeta,
+      })),
+      turboThreshold: 0,
+    });
+  }
+
+  return series.filter(candidate => {
+    const typedCandidate = candidate as Highcharts.SeriesScatterOptions;
+    return Array.isArray(typedCandidate.data) ? typedCandidate.data.length > 0 : true;
+  });
+}
+
 function buildSpreadScreenerSeries(
   productData: TutorialProductData,
   normalization: Extract<IndicatorKey, 'mid' | 'wallmid'>,
@@ -464,12 +693,21 @@ function statCard(label: string, value: string, detail?: string): ReactNode {
   );
 }
 
+function pickDefaultProduct(productNames: string[]): string | null {
+  return productNames[0] ?? null;
+}
+
 export function DashboardPage(): ReactNode {
+  const algorithm = useStore(state => state.algorithm);
+  const setAlgorithm = useStore(state => state.setAlgorithm);
   const [bundledDataset, setBundledDataset] = useState<TutorialDataset | null>(null);
-  const [dataset, setDataset] = useState<TutorialDataset | null>(null);
+  const [marketDataset, setMarketDataset] = useState<TutorialDataset | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [strategyError, setStrategyError] = useState<string | null>(null);
+  const [loadingStrategy, setLoadingStrategy] = useState(false);
+  const [strategySourceLabel, setStrategySourceLabel] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
   const [normalization, setNormalization] = useState<IndicatorKey>('none');
@@ -481,11 +719,30 @@ export function DashboardPage(): ReactNode {
   const [showAggressiveBuys, setShowAggressiveBuys] = useState(true);
   const [showAggressiveSells, setShowAggressiveSells] = useState(true);
   const [showPassiveTrades, setShowPassiveTrades] = useState(true);
+  const [showStrategyOrders, setShowStrategyOrders] = useState(true);
+  const [showOwnFills, setShowOwnFills] = useState(true);
+  const [showFillMatches, setShowFillMatches] = useState(true);
   const [showLevel1, setShowLevel1] = useState(true);
   const [showLevel2, setShowLevel2] = useState(true);
   const [showLevel3, setShowLevel3] = useState(true);
   const [quantityRange, setQuantityRange] = useState<[number, number]>([1, 8]);
   const [activeTimestamp, setActiveTimestamp] = useState(0);
+
+  const strategyDatasetResult = useMemo<StrategyDatasetResult | null>(() => {
+    if (!algorithm) {
+      return null;
+    }
+
+    return buildStrategyDataset(algorithm, strategySourceLabel ?? algorithm.summary?.fileName ?? 'strategy log');
+  }, [algorithm, strategySourceLabel]);
+
+  const dataset = useMemo(() => {
+    if (marketDataset && strategyDatasetResult) {
+      return mergeTutorialDatasets(marketDataset, strategyDatasetResult.dataset);
+    }
+
+    return strategyDatasetResult?.dataset ?? marketDataset;
+  }, [marketDataset, strategyDatasetResult]);
 
   useEffect(() => {
     let cancelled = false;
@@ -497,22 +754,22 @@ export function DashboardPage(): ReactNode {
         }
 
         setBundledDataset(loadedDataset);
-        setDataset(loadedDataset);
+        setMarketDataset(loadedDataset);
 
         const defaultSession = loadedDataset.sessions[loadedDataset.sessions.length - 1];
-        const defaultProduct = defaultSession.productNames.includes('TOMATOES')
-          ? 'TOMATOES'
-          : defaultSession.productNames[0];
-        const defaultProductData = defaultSession.products[defaultProduct];
+        const defaultProduct = pickDefaultProduct(defaultSession.productNames);
+        const defaultProductData = defaultProduct ? defaultSession.products[defaultProduct] : null;
 
         setSelectedSessionId(defaultSession.id);
         setSelectedProduct(defaultProduct);
-        setQuantityRange([1, defaultProductData.maxTradeQuantity]);
-        setActiveTimestamp(defaultProductData.lastTimestamp);
+        if (defaultProductData) {
+          setQuantityRange([1, defaultProductData.maxTradeQuantity]);
+          setActiveTimestamp(defaultProductData.lastTimestamp);
+        }
       })
       .catch(err => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load the tutorial dataset');
+          setError(err instanceof Error ? err.message : 'Could not load the sample market dataset');
         }
       });
 
@@ -522,7 +779,7 @@ export function DashboardPage(): ReactNode {
   }, []);
 
   async function handleAdditionalFiles(files: FileList | null): Promise<void> {
-    if (!files || files.length === 0 || !dataset) {
+    if (!files || files.length === 0 || !marketDataset) {
       return;
     }
 
@@ -531,18 +788,18 @@ export function DashboardPage(): ReactNode {
 
     try {
       const uploadedDataset = await loadTutorialDatasetFromFiles([...files]);
-      const mergedDataset = mergeTutorialDatasets(dataset, uploadedDataset);
+      const mergedDataset = mergeTutorialDatasets(marketDataset, uploadedDataset);
       const newestSession = uploadedDataset.sessions[uploadedDataset.sessions.length - 1];
-      const defaultProduct = newestSession.productNames.includes('TOMATOES')
-        ? 'TOMATOES'
-        : newestSession.productNames[0];
-      const defaultProductData = newestSession.products[defaultProduct];
+      const defaultProduct = pickDefaultProduct(newestSession.productNames);
+      const defaultProductData = defaultProduct ? newestSession.products[defaultProduct] : null;
 
-      setDataset(mergedDataset);
+      setMarketDataset(mergedDataset);
       setSelectedSessionId(newestSession.id);
       setSelectedProduct(defaultProduct);
-      setQuantityRange([1, defaultProductData.maxTradeQuantity]);
-      setActiveTimestamp(defaultProductData.lastTimestamp);
+      if (defaultProductData) {
+        setQuantityRange([1, defaultProductData.maxTradeQuantity]);
+        setActiveTimestamp(defaultProductData.lastTimestamp);
+      }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Could not load the uploaded CSV files.');
     } finally {
@@ -556,15 +813,55 @@ export function DashboardPage(): ReactNode {
     }
 
     const defaultSession = bundledDataset.sessions[bundledDataset.sessions.length - 1];
-    const defaultProduct = defaultSession.productNames.includes('TOMATOES') ? 'TOMATOES' : defaultSession.productNames[0];
-    const defaultProductData = defaultSession.products[defaultProduct];
+    const defaultProduct = pickDefaultProduct(defaultSession.productNames);
+    const defaultProductData = defaultProduct ? defaultSession.products[defaultProduct] : null;
 
     setUploadError(null);
-    setDataset(bundledDataset);
+    setMarketDataset(bundledDataset);
     setSelectedSessionId(defaultSession.id);
     setSelectedProduct(defaultProduct);
-    setQuantityRange([1, defaultProductData.maxTradeQuantity]);
-    setActiveTimestamp(defaultProductData.lastTimestamp);
+    if (defaultProductData) {
+      setQuantityRange([1, defaultProductData.maxTradeQuantity]);
+      setActiveTimestamp(defaultProductData.lastTimestamp);
+    }
+  }
+
+  async function handleStrategyLog(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    setStrategyError(null);
+    setLoadingStrategy(true);
+
+    try {
+      const file = files[0];
+      const logs = await file.text();
+      const parsedAlgorithm = parseAlgorithmLogs(logs);
+      const result = buildStrategyDataset(parsedAlgorithm, file.name);
+      const newestSession = result.dataset.sessions[result.dataset.sessions.length - 1];
+      const defaultProduct = pickDefaultProduct(newestSession.productNames);
+      const defaultProductData = defaultProduct ? newestSession.products[defaultProduct] : null;
+
+      setStrategySourceLabel(file.name);
+      setAlgorithm(parsedAlgorithm);
+      setSelectedSessionId(newestSession.id);
+      setSelectedProduct(defaultProduct);
+      if (defaultProductData) {
+        setQuantityRange([1, defaultProductData.maxTradeQuantity]);
+        setActiveTimestamp(defaultProductData.lastTimestamp);
+      }
+    } catch (err) {
+      setStrategyError(err instanceof Error ? err.message : 'Could not load the strategy log.');
+    } finally {
+      setLoadingStrategy(false);
+    }
+  }
+
+  function clearStrategyLog(): void {
+    setStrategyError(null);
+    setStrategySourceLabel(null);
+    setAlgorithm(null);
   }
 
   const selectedSession = useMemo(
@@ -585,6 +882,21 @@ export function DashboardPage(): ReactNode {
   const productData = useMemo(
     () => (selectedSession && resolvedProduct ? selectedSession.products[resolvedProduct] : null),
     [resolvedProduct, selectedSession],
+  );
+
+  const strategySessionOverlay = useMemo(
+    () =>
+      selectedSession
+        ? strategyDatasetResult?.overlaysBySessionId[selectedSession.id] ??
+          Object.values(strategyDatasetResult?.overlaysBySessionId ?? {}).find(session => session.day === selectedSession.day) ??
+          null
+        : null,
+    [selectedSession, strategyDatasetResult],
+  );
+
+  const strategyProductOverlay = useMemo(
+    () => (strategySessionOverlay && resolvedProduct ? strategySessionOverlay.products[resolvedProduct] ?? null : null),
+    [resolvedProduct, strategySessionOverlay],
   );
 
   useEffect(() => {
@@ -628,19 +940,31 @@ export function DashboardPage(): ReactNode {
   const marketSeries = useMemo(
     () =>
       productData
-        ? buildMarketSeries(
-            productData,
-            normalization,
-            indicator,
-            Number(downsampleStep),
-            showBook,
-            showTrades,
-            visibleLevels,
-            showAggressiveBuys,
-            showAggressiveSells,
-            showPassiveTrades,
-            quantityRange,
-          )
+        ? [
+            ...buildMarketSeries(
+              productData,
+              normalization,
+              indicator,
+              Number(downsampleStep),
+              showBook,
+              showTrades,
+              visibleLevels,
+              showAggressiveBuys,
+              showAggressiveSells,
+              showPassiveTrades,
+              quantityRange,
+            ),
+            ...(strategyProductOverlay
+              ? buildStrategySeries(
+                  productData,
+                  strategyProductOverlay,
+                  normalization,
+                  showStrategyOrders,
+                  showOwnFills,
+                  showFillMatches,
+                )
+              : []),
+          ]
         : [],
     [
       downsampleStep,
@@ -651,8 +975,12 @@ export function DashboardPage(): ReactNode {
       showAggressiveBuys,
       showAggressiveSells,
       showBook,
+      showFillMatches,
+      showOwnFills,
       showPassiveTrades,
+      showStrategyOrders,
       showTrades,
+      strategyProductOverlay,
       visibleLevels,
     ],
   );
@@ -693,9 +1021,68 @@ export function DashboardPage(): ReactNode {
       .slice(0, 12);
   }, [activeSnapshot, filteredTrades]);
 
-  const pnlSeries = useMemo<Highcharts.SeriesOptionsType[]>(
+  const activeStrategyOrders = useMemo(() => {
+    if (!activeSnapshot || !strategyProductOverlay) {
+      return [];
+    }
+
+    return strategyProductOverlay.orderEvents
+      .filter(event => Math.abs(event.timestamp - activeSnapshot.timestamp) <= DETAIL_WINDOW)
+      .sort((a, b) => Math.abs(a.timestamp - activeSnapshot.timestamp) - Math.abs(b.timestamp - activeSnapshot.timestamp))
+      .slice(0, 12);
+  }, [activeSnapshot, strategyProductOverlay]);
+
+  const activeOwnFills = useMemo(() => {
+    if (!activeSnapshot || !strategyProductOverlay) {
+      return [];
+    }
+
+    return strategyProductOverlay.ownTradeEvents
+      .filter(event => Math.abs(event.timestamp - activeSnapshot.timestamp) <= DETAIL_WINDOW)
+      .sort((a, b) => Math.abs(a.timestamp - activeSnapshot.timestamp) - Math.abs(b.timestamp - activeSnapshot.timestamp))
+      .slice(0, 12);
+  }, [activeSnapshot, strategyProductOverlay]);
+
+  const activeFillMatches = useMemo(() => {
+    if (!activeSnapshot || !strategyProductOverlay) {
+      return [];
+    }
+
+    return strategyProductOverlay.fillMatchEvents
+      .filter(event => Math.abs(event.timestamp - activeSnapshot.timestamp) <= DETAIL_WINDOW)
+      .sort((a, b) => Math.abs(a.timestamp - activeSnapshot.timestamp) - Math.abs(b.timestamp - activeSnapshot.timestamp))
+      .slice(0, 12);
+  }, [activeSnapshot, strategyProductOverlay]);
+
+  const strategyPnlPoints = useMemo<[number, number][]>(
     () =>
-      productData
+      algorithm && selectedSession
+        ? aggregateProfitLossByTimestamp(
+            algorithm.activityLogs
+              .filter(row => row.day === selectedSession.day)
+              .map(row => ({ timestamp: row.timestamp, profitLoss: row.profitLoss })),
+          )
+        : [],
+    [algorithm, selectedSession],
+  );
+
+  const pnlSeries = useMemo<Highcharts.SeriesOptionsType[]>(
+    () => {
+      if (strategyPnlPoints.length > 0) {
+        return [
+          {
+            type: 'line',
+            name: 'Backtest PnL',
+            color: '#c59834',
+            data: strategyPnlPoints,
+            marker: {
+              enabled: false,
+            },
+          },
+        ];
+      }
+
+      return productData
         ? [
             {
               type: 'line',
@@ -707,8 +1094,9 @@ export function DashboardPage(): ReactNode {
               },
             },
           ]
-        : [],
-    [productData],
+        : [];
+    },
+    [productData, strategyPnlPoints],
   );
 
   const flowSeries = useMemo<Highcharts.SeriesOptionsType[]>(
@@ -749,6 +1137,47 @@ export function DashboardPage(): ReactNode {
   const latestBaseMid = productData?.snapshots[productData.snapshots.length - 1]?.baseMid ?? 0;
   const flowData = ((flowSeries[0] as Highcharts.SeriesLineOptions | undefined)?.data ?? []) as [number, number][];
   const flowNow = flowData.length > 0 ? flowData[flowData.length - 1][1] : 0;
+  const activeStrategyPosition = useMemo(() => {
+    if (!activeSnapshot || !strategyProductOverlay || strategyProductOverlay.positionSeries.length === 0) {
+      return null;
+    }
+
+    let currentPosition = strategyProductOverlay.positionSeries[0].position;
+
+    strategyProductOverlay.positionSeries.forEach(point => {
+      if (point.timestamp <= activeSnapshot.timestamp) {
+        currentPosition = point.position;
+      }
+    });
+
+    return currentPosition;
+  }, [activeSnapshot, strategyProductOverlay]);
+  const pnlIsFlat = useMemo(
+    () => productData?.snapshots.every(snapshot => snapshot.profitLoss === productData.snapshots[0]?.profitLoss) ?? true,
+    [productData],
+  );
+  const marketTimelineAxis = useMemo<Highcharts.XAxisOptions>(
+    () => ({
+      min: productData?.snapshots[0]?.timestamp,
+      max: productData?.snapshots[productData.snapshots.length - 1]?.timestamp,
+      plotLines: [
+        {
+          value: activeSnapshot?.timestamp ?? 0,
+          color: '#c59834',
+          width: 1,
+          dashStyle: 'ShortDot',
+          zIndex: 5,
+        },
+      ],
+    }),
+    [activeSnapshot?.timestamp, productData],
+  );
+  const hasBacktestPnl = strategyPnlPoints.length > 0;
+  const pnlDescription = hasBacktestPnl
+    ? 'Aggregated across all products from the imported strategy log so the backtest equity curve stays aligned with the market tape above.'
+    : pnlIsFlat
+      ? 'This dataset keeps the file-level PnL flat, but the chart will move automatically when the imported data includes a richer profit-and-loss field.'
+      : 'This chart is reading the file-level profit-and-loss column directly from the imported price data.';
 
   if (error) {
     return (
@@ -814,15 +1243,7 @@ export function DashboardPage(): ReactNode {
       },
     },
     xAxis: {
-      plotLines: [
-        {
-          value: activeSnapshot.timestamp,
-          color: '#c59834',
-          width: 1,
-          dashStyle: 'ShortDot',
-          zIndex: 5,
-        },
-      ],
+      ...marketTimelineAxis,
     },
     legend: {
       enabled: true,
@@ -837,11 +1258,14 @@ export function DashboardPage(): ReactNode {
             <Group justify="space-between" align="flex-start" gap="lg">
               <Box>
                 <Text className={classes.eyebrow}>Prosperity Desk</Text>
-                <Title className={classes.headline}>Tutorial order-book monitor rebuilt around the Hedgehogs dashboard.</Title>
+                <Title className={classes.headline}>{dataset.title}</Title>
                 <Text size="lg" className={classes.lede}>
-                  The layout follows the README’s intent: a depth-over-time market plot, trade markers, normalization
-                  controls, and timestamp-synced detail panes. The bundled tutorial sessions load by default, and you
-                  can add more `prices_*.csv` and `trades_*.csv` files in the same format without changing code.
+                  This desk is built for IMC-style `prices` and `trades` CSVs. It starts from bundled sample sessions,
+                  and it can also replay backtest logs in the same view so you can inspect the market, your quotes,
+                  your fills, and the trades that hit you in one synchronized chart.
+                </Text>
+                <Text size="sm" mt="sm" className={classes.subtle}>
+                  Source: {dataset.source}
                 </Text>
               </Box>
               <Stack gap="xs" align="flex-end">
@@ -860,13 +1284,29 @@ export function DashboardPage(): ReactNode {
 
           <Alert color="blue" variant="light" icon={<IconInfoCircle size={18} />}>
             Trades are classified by comparing each print to the most recent visible best bid and ask. The “Flow Proxy”
-            panel is cumulative signed trade flow because these tutorial files do not include your own positions. `WallMid`
-            follows the Hedgehogs FAQ idea and is inferred here from persistent high-volume bid and ask walls.
+            panel is cumulative signed trade flow when raw files do not expose your own positions. `WallMid` is inferred
+            from persistent high-volume bid and ask walls so the same screen works on plain market-data exports. When a
+            backtest log includes order state, the main plot can overlay your bids, asks, fills, and matched market
+            prints directly on top of the market tape.
           </Alert>
 
           {uploadError && (
             <Alert color="red" variant="light" title="Upload failed">
               {uploadError}
+            </Alert>
+          )}
+
+          {strategyError && (
+            <Alert color="red" variant="light" title="Strategy log failed">
+              {strategyError}
+            </Alert>
+          )}
+
+          {algorithm && strategyDatasetResult && !strategyDatasetResult.supportsOrders && !strategyDatasetResult.supportsOwnTrades && (
+            <Alert color="yellow" variant="light" title="Limited backtest overlay">
+              This log supports market replay, but it does not include per-timestamp strategy state. You can inspect the
+              market and trade history in the dashboard, but your submitted bids, asks, and own fills are not available
+              from this file.
             </Alert>
           )}
 
@@ -879,6 +1319,50 @@ export function DashboardPage(): ReactNode {
                   series={marketSeries}
                   options={marketOptions}
                 />
+
+                <Box mt="md">
+                  <Text className={classes.sectionLabel}>Backtest PnL</Text>
+                  <Chart
+                    title={hasBacktestPnl ? 'Backtest profit and loss' : 'Provided profit and loss'}
+                    series={pnlSeries}
+                    options={{
+                      chart: {
+                        height: 240,
+                      },
+                      plotOptions: {
+                        series: {
+                          dataGrouping: {
+                            enabled: false,
+                          },
+                          point: {
+                            events: {
+                              mouseOver() {
+                                if (typeof this.x === 'number') {
+                                  setActiveTimestamp(this.x);
+                                }
+                              },
+                            },
+                          },
+                        },
+                      },
+                      xAxis: {
+                        ...marketTimelineAxis,
+                      },
+                      yAxis: {
+                        title: {
+                          text: 'PnL',
+                        },
+                        allowDecimals: true,
+                      },
+                      legend: {
+                        enabled: false,
+                      },
+                    }}
+                  />
+                  <Text size="sm" mt="sm" className={classes.subtle}>
+                    {pnlDescription}
+                  </Text>
+                </Box>
 
                 <Paper withBorder radius="lg" p="md" className={classes.scrubberCard}>
                   <Group justify="space-between" mb="xs">
@@ -913,7 +1397,7 @@ export function DashboardPage(): ReactNode {
                       <Text fw={600}>Data input</Text>
                       <Group>
                         <Button component="label" loading={uploading} variant="filled" color="marketBlue">
-                          Add price/trade CSVs
+                          Import market CSVs
                           <input
                             hidden
                             type="file"
@@ -926,12 +1410,37 @@ export function DashboardPage(): ReactNode {
                           />
                         </Button>
                         <Button variant="light" color="gray" onClick={resetToBundledDataset} disabled={!bundledDataset}>
-                          Reset to tutorial
+                          Reset to sample
                         </Button>
                       </Group>
                       <Text size="sm" className={classes.subtle}>
-                        Pairing is based on filenames like `prices_round_1_day_0.csv` and `trades_round_1_day_0.csv`.
-                        If a trades file is missing, the session still loads with an empty trade tape.
+                        Files are classified from their headers and paired using filename hints such as shared session
+                        stems. If a trade file is missing, the price session still loads with an empty tape.
+                      </Text>
+                    </Stack>
+
+                    <Stack gap="xs">
+                      <Text fw={600}>Backtest overlay</Text>
+                      <Group>
+                        <Button component="label" loading={loadingStrategy} variant="filled" color="marketRed">
+                          Import strategy log
+                          <input
+                            hidden
+                            type="file"
+                            accept=".log,.json,text/plain,application/json"
+                            onChange={event => {
+                              void handleStrategyLog(event.currentTarget.files);
+                              event.currentTarget.value = '';
+                            }}
+                          />
+                        </Button>
+                        <Button variant="light" color="gray" onClick={clearStrategyLog} disabled={!algorithm}>
+                          Clear strategy
+                        </Button>
+                      </Group>
+                      <Text size="sm" className={classes.subtle}>
+                        Supports official Prosperity logs for market replay. Submitted bids, asks, and own fills appear
+                        when the log contains per-timestamp strategy state from a compatible backtest/logger format.
                       </Text>
                     </Stack>
 
@@ -1034,6 +1543,28 @@ export function DashboardPage(): ReactNode {
                     </Stack>
 
                     <Stack gap="xs">
+                      <Text fw={600}>Backtest overlays</Text>
+                      <Checkbox
+                        checked={showStrategyOrders}
+                        onChange={event => setShowStrategyOrders(event.currentTarget.checked)}
+                        label="Our bids and asks"
+                        disabled={!strategyProductOverlay}
+                      />
+                      <Checkbox
+                        checked={showOwnFills}
+                        onChange={event => setShowOwnFills(event.currentTarget.checked)}
+                        label="Our fills"
+                        disabled={!strategyProductOverlay}
+                      />
+                      <Checkbox
+                        checked={showFillMatches}
+                        onChange={event => setShowFillMatches(event.currentTarget.checked)}
+                        label="Trades that filled us"
+                        disabled={!strategyProductOverlay}
+                      />
+                    </Stack>
+
+                    <Stack gap="xs">
                       <Group justify="space-between">
                         <Text fw={600}>Trade size filter</Text>
                         <Text size="sm" className={classes.mono}>
@@ -1074,40 +1605,16 @@ export function DashboardPage(): ReactNode {
                     {statCard('Avg spread', formatNumber(averageSpread, 1))}
                     {statCard('Visible trades', formatNumber(filteredTrades.length))}
                     {statCard('Flow proxy', formatSigned(flowNow, 0))}
+                    {statCard('Our orders', formatNumber(strategyProductOverlay?.orderEvents.length ?? 0))}
+                    {statCard('Our fills', formatNumber(strategyProductOverlay?.ownTradeEvents.length ?? 0))}
                     {statCard('Hovered mid', formatNumber(activeSnapshot.midPrice, 1))}
                     {statCard('Hovered wallmid', formatNumber(activeSnapshot.wallMid, 1))}
+                    {statCard('Fill matches', formatNumber(strategyProductOverlay?.fillMatchEvents.length ?? 0))}
+                    {statCard('Position', activeStrategyPosition === null ? 'n/a' : formatSigned(activeStrategyPosition, 0))}
                     {statCard('Book imbalance', formatSigned(activeSnapshot.bookImbalance * 100, 1), 'percent of visible depth')}
                   </SimpleGrid>
                 </Paper>
               </Stack>
-            </Grid.Col>
-
-            <Grid.Col span={{ base: 12, md: 6 }}>
-              <Paper withBorder radius="xl" p="md" className={classes.panel}>
-                <Text className={classes.sectionLabel}>File PnL</Text>
-                <Chart
-                  title="Provided profit and loss"
-                  series={pnlSeries}
-                  options={{
-                    chart: {
-                      height: 320,
-                    },
-                    yAxis: {
-                      title: {
-                        text: 'PnL',
-                      },
-                      allowDecimals: true,
-                    },
-                    legend: {
-                      enabled: false,
-                    },
-                  }}
-                />
-                <Text size="sm" mt="sm" className={classes.subtle}>
-                  The tutorial files keep PnL flat at zero. The panel is still wired to the file field so it will move
-                  automatically when you feed it richer data later.
-                </Text>
-              </Paper>
             </Grid.Col>
 
             <Grid.Col span={{ base: 12, md: 6 }}>
@@ -1280,6 +1787,119 @@ export function DashboardPage(): ReactNode {
                         </Group>
                       </Box>
                     ))}
+                  </Stack>
+                )}
+              </Paper>
+            </Grid.Col>
+
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <Paper withBorder radius="xl" p="md" className={classes.panel}>
+                <Text className={classes.sectionLabel}>Backtest Activity</Text>
+                {!strategyProductOverlay ? (
+                  <Box className={classes.placeholder}>
+                    Load a strategy log and select a matching backtest session to inspect your quotes, fills, and
+                    matched market prints here.
+                  </Box>
+                ) : (
+                  <Stack gap="md">
+                    <Box>
+                      <Group justify="space-between" mb="xs">
+                        <Text fw={700}>Our bids and asks</Text>
+                        <Text size="sm" className={classes.subtle}>
+                          +/- {formatNumber(DETAIL_WINDOW)} ms
+                        </Text>
+                      </Group>
+                      {activeStrategyOrders.length === 0 ? (
+                        <Box className={classes.placeholder}>No submitted quotes fall inside the current time window.</Box>
+                      ) : (
+                        <Stack gap={0} className={classes.tradeTape}>
+                          {activeStrategyOrders.map((event, index) => (
+                            <Box key={`${event.timestamp}-${event.price}-${event.side}-${index}`} className={classes.tradeRow}>
+                              <Group justify="space-between" align="flex-start">
+                                <Box>
+                                  <Group gap="xs">
+                                    <Badge color={event.side === 'bid' ? 'teal' : 'red'}>{event.side}</Badge>
+                                    <Text className={classes.mono}>{formatNumber(event.timestamp)}</Text>
+                                  </Group>
+                                  <Text mt={6}>
+                                    <span className={classes.mono}>{formatNumber(event.price, 1)}</span> for{' '}
+                                    <span className={classes.mono}>{formatNumber(event.quantity)}</span>
+                                  </Text>
+                                </Box>
+                              </Group>
+                            </Box>
+                          ))}
+                        </Stack>
+                      )}
+                    </Box>
+
+                    <Divider />
+
+                    <Box>
+                      <Text fw={700} mb="xs">
+                        Our fills
+                      </Text>
+                      {activeOwnFills.length === 0 ? (
+                        <Box className={classes.placeholder}>No own fills fall inside the current time window.</Box>
+                      ) : (
+                        <Stack gap={0} className={classes.tradeTape}>
+                          {activeOwnFills.map((event, index) => (
+                            <Box key={`${event.timestamp}-${event.price}-${event.quantity}-${index}`} className={classes.tradeRow}>
+                              <Group justify="space-between" align="flex-start">
+                                <Box>
+                                  <Group gap="xs">
+                                    <Badge color={event.side === 'buy' ? 'teal' : event.side === 'sell' ? 'red' : 'yellow'}>
+                                      {event.side}
+                                    </Badge>
+                                    <Text className={classes.mono}>{formatNumber(event.timestamp)}</Text>
+                                  </Group>
+                                  <Text mt={6}>
+                                    <span className={classes.mono}>{formatNumber(event.price, 1)}</span> for{' '}
+                                    <span className={classes.mono}>{formatNumber(event.quantity)}</span>
+                                  </Text>
+                                </Box>
+                                <Text size="sm" className={classes.subtle}>
+                                  {event.counterpart ? `vs ${event.counterpart}` : 'counterparty n/a'}
+                                </Text>
+                              </Group>
+                            </Box>
+                          ))}
+                        </Stack>
+                      )}
+                    </Box>
+
+                    <Divider />
+
+                    <Box>
+                      <Text fw={700} mb="xs">
+                        Trades that filled us
+                      </Text>
+                      {activeFillMatches.length === 0 ? (
+                        <Box className={classes.placeholder}>No matching market prints fall inside the current time window.</Box>
+                      ) : (
+                        <Stack gap={0} className={classes.tradeTape}>
+                          {activeFillMatches.map((event, index) => (
+                            <Box key={`${event.timestamp}-${event.price}-${event.quantity}-${event.buyer}-${event.seller}-${index}`} className={classes.tradeRow}>
+                              <Group justify="space-between" align="flex-start">
+                                <Box>
+                                  <Group gap="xs">
+                                    <Badge color="violet">fill match</Badge>
+                                    <Text className={classes.mono}>{formatNumber(event.timestamp)}</Text>
+                                  </Group>
+                                  <Text mt={6}>
+                                    <span className={classes.mono}>{formatNumber(event.price, 1)}</span> for{' '}
+                                    <span className={classes.mono}>{formatNumber(event.quantity)}</span>
+                                  </Text>
+                                </Box>
+                                <Text size="sm" className={classes.subtle}>
+                                  {event.buyer || '—'} / {event.seller || '—'}
+                                </Text>
+                              </Group>
+                            </Box>
+                          ))}
+                        </Stack>
+                      )}
+                    </Box>
                   </Stack>
                 )}
               </Paper>

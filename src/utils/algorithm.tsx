@@ -25,6 +25,7 @@ import {
   UserId,
 } from '../models.ts';
 import { authenticatedAxios } from './axios.ts';
+import { extractBookSide, getCsvNumber, getCsvString, parseImcCsv } from './imcCsv.ts';
 
 export class AlgorithmParseError extends Error {
   public constructor(public readonly node: ReactNode) {
@@ -55,47 +56,25 @@ interface WrappedAlgorithmLogFile {
   tradeHistory: WrappedTradeHistoryRow[];
 }
 
-function getColumnValues(columns: string[], indices: number[]): number[] {
-  const values: number[] = [];
-
-  for (const index of indices) {
-    const value = columns[index];
-    if (value !== '') {
-      values.push(parseFloat(value));
-    }
-  }
-
-  return values;
-}
-
 function parseActivityCsv(csv: string): ActivityLogRow[] {
-  const lines = csv.trim().split(/\r?\n/);
-  if (lines.length <= 1) {
-    return [];
-  }
+  const parsed = parseImcCsv(csv);
 
-  const rows: ActivityLogRow[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim().length === 0) {
-      continue;
-    }
+  return parsed.rows.map(columns => {
+    const bidSide = extractBookSide(columns, parsed, 'bid', [3, 5, 7], [4, 6, 8]);
+    const askSide = extractBookSide(columns, parsed, 'ask', [9, 11, 13], [10, 12, 14]);
 
-    const columns = line.split(';');
-    rows.push({
-      day: Number(columns[0]),
-      timestamp: Number(columns[1]),
-      product: columns[2],
-      bidPrices: getColumnValues(columns, [3, 5, 7]),
-      bidVolumes: getColumnValues(columns, [4, 6, 8]),
-      askPrices: getColumnValues(columns, [9, 11, 13]),
-      askVolumes: getColumnValues(columns, [10, 12, 14]),
-      midPrice: Number(columns[15]),
-      profitLoss: Number(columns[16]),
-    });
-  }
-
-  return rows;
+    return {
+      day: getCsvNumber(columns, parsed, ['day'], 0),
+      timestamp: getCsvNumber(columns, parsed, ['timestamp'], 1),
+      product: getCsvString(columns, parsed, ['product', 'symbol'], 2),
+      bidPrices: bidSide.prices,
+      bidVolumes: bidSide.volumes,
+      askPrices: askSide.prices,
+      askVolumes: askSide.volumes,
+      midPrice: getCsvNumber(columns, parsed, ['mid_price', 'midprice'], 15),
+      profitLoss: getCsvNumber(columns, parsed, ['profit_and_loss', 'profit_loss', 'pnl'], 16),
+    };
+  });
 }
 
 function getActivityLogs(logLines: string[]): ActivityLogRow[] {
@@ -104,30 +83,21 @@ function getActivityLogs(logLines: string[]): ActivityLogRow[] {
     return [];
   }
 
-  const rows: ActivityLogRow[] = [];
-
-  for (let i = headerIndex + 2; i < logLines.length; i++) {
+  const activityLines: string[] = [];
+  for (let i = headerIndex + 1; i < logLines.length; i++) {
     const line = logLines[i];
     if (line === '') {
       break;
     }
 
-    const columns = line.split(';');
-
-    rows.push({
-      day: Number(columns[0]),
-      timestamp: Number(columns[1]),
-      product: columns[2],
-      bidPrices: getColumnValues(columns, [3, 5, 7]),
-      bidVolumes: getColumnValues(columns, [4, 6, 8]),
-      askPrices: getColumnValues(columns, [9, 11, 13]),
-      askVolumes: getColumnValues(columns, [10, 12, 14]),
-      midPrice: Number(columns[15]),
-      profitLoss: Number(columns[16]),
-    });
+    activityLines.push(line);
   }
 
-  return rows;
+  if (activityLines.length === 0) {
+    return [];
+  }
+
+  return parseActivityCsv(activityLines.join('\n'));
 }
 
 function isWrappedAlgorithmLogFile(value: unknown): value is WrappedAlgorithmLogFile {
@@ -510,12 +480,4 @@ function downloadFile(url: string): void {
 export async function downloadAlgorithmLogs(algorithmId: string): Promise<void> {
   const logsUrl = await getAlgorithmLogsUrl(algorithmId);
   downloadFile(logsUrl);
-}
-
-export async function downloadAlgorithmResults(algorithmId: string): Promise<void> {
-  const detailsResponse = await authenticatedAxios.get(
-    `https://bz97lt8b1e.execute-api.eu-west-1.amazonaws.com/prod/results/tutorial/${algorithmId}`,
-  );
-
-  downloadFile(detailsResponse.data.algo.summary.activitiesLog);
 }

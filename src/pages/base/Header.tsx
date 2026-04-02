@@ -13,7 +13,7 @@ export function Header(): ReactNode {
     ? 'Prosperity 3 Round 1 latent actor board'
     : isStrategyPage
     ? 'Upload and inspect Prosperity strategy logs'
-    : 'Hedgehogs-style tutorial market dashboard';
+    : 'Generic IMC market-data desk with bundled sample sessions';
 
   const badges = isArchetypesPage
     ? [
@@ -57,7 +57,7 @@ export function Header(): ReactNode {
               size="compact-sm"
               className={classes.navButton}
             >
-              Tutorial Desk
+              Market Desk
             </Button>
             <Button
               component={NavLink}

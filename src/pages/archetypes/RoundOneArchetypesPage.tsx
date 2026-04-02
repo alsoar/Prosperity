@@ -817,103 +817,101 @@ export function RoundOneArchetypesPage(): ReactNode {
                   </Badge>
                 </Group>
 
-                <ScrollArea className={classes.leaderboard}>
-                  <Stack gap="sm">
-                    {visibleActors.map(actor => (
-                      <Paper
-                        key={actor.actorId}
-                        radius="lg"
-                        className={`${classes.leaderCard} ${selectedActor?.actorId === actor.actorId ? classes.leaderCardSelected : ''}`}
-                        onClick={() => {
-                          startTransition(() => {
-                            setSelectedActorId(actor.actorId);
-                          });
-                        }}
-                      >
-                        <Group align="flex-start" wrap="nowrap">
-                          <div className={classes.rankPill}>
-                            #
-                            {deferredSortMode === 'conviction'
-                              ? actor.rank
-                              : deferredSortMode === 'profitability'
-                              ? actor.profitabilityRank
-                              : actor.edgePerEventRank}
-                          </div>
-                          <Stack gap={8} style={{ flex: 1 }}>
-                            <Group justify="space-between" gap="sm" wrap="wrap">
-                              <div>
-                                <Text fw={700}>{actor.product}</Text>
-                                <Text size="sm" className={classes.subtle}>
-                                  {actor.description}
-                                </Text>
-                              </div>
-                              <div>
-                                <Text ta="right" size="xs" className={classes.subtle}>
-                                  {deferredSortMode === 'conviction'
-                                    ? 'Round 1 conviction'
-                                    : deferredSortMode === 'profitability'
-                                    ? 'Cumulative edge proxy'
-                                    : 'Average edge / event'}
-                                </Text>
-                                <Text className={classes.scoreValue} ta="right">
-                                  {deferredSortMode === 'conviction'
-                                    ? formatNumber(actor.round1ConvictionScore, 2)
-                                    : deferredSortMode === 'profitability'
-                                    ? `${formatNumber(actor.profitabilityProxyBps2000, 0)} bps`
-                                    : `${formatNumber(actor.forwardReturnBps2000, 0)} bps`}
-                                </Text>
-                              </div>
-                            </Group>
-
-                            <div className={classes.metaRow}>
-                              <Badge
-                                color={
-                                  deferredSortMode === 'conviction'
-                                    ? convictionColor(actor.convictionBand)
-                                    : deferredSortMode === 'profitability'
-                                    ? profitabilityColor(actor.profitabilityBand)
-                                    : edgeColor(actor.edgePerEventBand)
-                                }
-                                variant="light"
-                              >
-                                {deferredSortMode === 'conviction'
-                                  ? actor.convictionBand
-                                  : deferredSortMode === 'profitability'
-                                  ? actor.profitabilityBand
-                                  : actor.edgePerEventBand}
-                              </Badge>
-                              <Badge color="marketBlue" variant="light">
-                                {flowLabel(actor.flowStyleLabel)}
-                              </Badge>
-                              <Badge color="gray" variant="light">
-                                {directionLabel(actor.dominantDirectionLabel)}
-                              </Badge>
-                              <Badge color="brass" variant="light">
-                                {actor.sizeFamily}
-                              </Badge>
+                <Stack gap="sm" className={classes.leaderboard}>
+                  {visibleActors.map(actor => (
+                    <Paper
+                      key={actor.actorId}
+                      radius="lg"
+                      className={`${classes.leaderCard} ${selectedActor?.actorId === actor.actorId ? classes.leaderCardSelected : ''}`}
+                      onClick={() => {
+                        startTransition(() => {
+                          setSelectedActorId(actor.actorId);
+                        });
+                      }}
+                    >
+                      <Group align="flex-start" wrap="nowrap">
+                        <div className={classes.rankPill}>
+                          #
+                          {deferredSortMode === 'conviction'
+                            ? actor.rank
+                            : deferredSortMode === 'profitability'
+                            ? actor.profitabilityRank
+                            : actor.edgePerEventRank}
+                        </div>
+                        <Stack gap={8} style={{ flex: 1 }}>
+                          <Group justify="space-between" gap="sm" wrap="wrap">
+                            <div>
+                              <Text fw={700}>{actor.product}</Text>
+                              <Text size="sm" className={classes.subtle}>
+                                {actor.description}
+                              </Text>
                             </div>
+                            <div>
+                              <Text ta="right" size="xs" className={classes.subtle}>
+                                {deferredSortMode === 'conviction'
+                                  ? 'Round 1 conviction'
+                                  : deferredSortMode === 'profitability'
+                                  ? 'Cumulative edge proxy'
+                                  : 'Average edge / event'}
+                              </Text>
+                              <Text className={classes.scoreValue} ta="right">
+                                {deferredSortMode === 'conviction'
+                                  ? formatNumber(actor.round1ConvictionScore, 2)
+                                  : deferredSortMode === 'profitability'
+                                  ? `${formatNumber(actor.profitabilityProxyBps2000, 0)} bps`
+                                  : `${formatNumber(actor.forwardReturnBps2000, 0)} bps`}
+                              </Text>
+                            </div>
+                          </Group>
 
-                            <Text size="sm">{focusNote(actor)}</Text>
-                            <Group gap="md">
-                              <Text size="sm" className={classes.subtle}>
-                                Events <span className={classes.mono}>{formatNumber(actor.round1EventCount)}</span>
-                              </Text>
-                              <Text size="sm" className={classes.subtle}>
-                                Edge <span className={classes.mono}>{formatNumber(actor.forwardReturnBps2000, 0)} bps</span>
-                              </Text>
-                              <Text size="sm" className={classes.subtle}>
-                                Profit proxy <span className={classes.mono}>{formatNumber(actor.profitabilityProxyBps2000, 0)} bps</span>
-                              </Text>
-                              <Text size="sm" className={classes.subtle}>
-                                Hit rate <span className={classes.mono}>{formatPercent(actor.hitRate2000)}</span>
-                              </Text>
-                            </Group>
-                          </Stack>
-                        </Group>
-                      </Paper>
-                    ))}
-                  </Stack>
-                </ScrollArea>
+                          <div className={classes.metaRow}>
+                            <Badge
+                              color={
+                                deferredSortMode === 'conviction'
+                                  ? convictionColor(actor.convictionBand)
+                                  : deferredSortMode === 'profitability'
+                                  ? profitabilityColor(actor.profitabilityBand)
+                                  : edgeColor(actor.edgePerEventBand)
+                              }
+                              variant="light"
+                            >
+                              {deferredSortMode === 'conviction'
+                                ? actor.convictionBand
+                                : deferredSortMode === 'profitability'
+                                ? actor.profitabilityBand
+                                : actor.edgePerEventBand}
+                            </Badge>
+                            <Badge color="marketBlue" variant="light">
+                              {flowLabel(actor.flowStyleLabel)}
+                            </Badge>
+                            <Badge color="gray" variant="light">
+                              {directionLabel(actor.dominantDirectionLabel)}
+                            </Badge>
+                            <Badge color="brass" variant="light">
+                              {actor.sizeFamily}
+                            </Badge>
+                          </div>
+
+                          <Text size="sm">{focusNote(actor)}</Text>
+                          <Group gap="md">
+                            <Text size="sm" className={classes.subtle}>
+                              Events <span className={classes.mono}>{formatNumber(actor.round1EventCount)}</span>
+                            </Text>
+                            <Text size="sm" className={classes.subtle}>
+                              Edge <span className={classes.mono}>{formatNumber(actor.forwardReturnBps2000, 0)} bps</span>
+                            </Text>
+                            <Text size="sm" className={classes.subtle}>
+                              Profit proxy <span className={classes.mono}>{formatNumber(actor.profitabilityProxyBps2000, 0)} bps</span>
+                            </Text>
+                            <Text size="sm" className={classes.subtle}>
+                              Hit rate <span className={classes.mono}>{formatPercent(actor.hitRate2000)}</span>
+                            </Text>
+                          </Group>
+                        </Stack>
+                      </Group>
+                    </Paper>
+                  ))}
+                </Stack>
               </Paper>
             </Grid.Col>
 

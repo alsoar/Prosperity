@@ -111,7 +111,7 @@
 }
 
 .leaderboard {
-  max-height: rem(920px);
+  min-height: 0;
 }
 
 .leaderCard {

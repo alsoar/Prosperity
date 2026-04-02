@@ -3,7 +3,7 @@ import { ReactNode } from 'react';
 import { ScrollableCodeHighlight } from '../../components/ScrollableCodeHighlight.tsx';
 import { useAsync } from '../../hooks/use-async.ts';
 import { useStore } from '../../store.ts';
-import { downloadAlgorithmLogs, downloadAlgorithmResults } from '../../utils/algorithm.tsx';
+import { downloadAlgorithmLogs } from '../../utils/algorithm.tsx';
 import { formatTimestamp } from '../../utils/format.ts';
 import { VisualizerCard } from './VisualizerCard.tsx';
 
@@ -13,10 +13,6 @@ export function AlgorithmSummaryCard(): ReactNode {
 
   const downloadLogs = useAsync<void>(async () => {
     await downloadAlgorithmLogs(summary.id);
-  });
-
-  const downloadResults = useAsync<void>(async () => {
-    await downloadAlgorithmResults(summary.id);
   });
 
   return (
@@ -64,9 +60,6 @@ export function AlgorithmSummaryCard(): ReactNode {
           <Group grow>
             <Button variant="outline" onClick={downloadLogs.call} loading={downloadLogs.loading}>
               Download logs
-            </Button>
-            <Button variant="outline" onClick={downloadResults.call} loading={downloadResults.loading}>
-              Download results
             </Button>
           </Group>
         </Grid.Col>

@@ -164,18 +164,18 @@ class Trader:
         <HomeCard title="Welcome!">
           {/* prettier-ignore */}
           <Text>
-            IMC Prosperity 3 Visualizer is a visualizer for <Anchor href="https://prosperity.imc.com/" target="_blank" rel="noreferrer">IMC Prosperity 3</Anchor> algorithms.
+            Prosperity Desk includes a strategy-log viewer for <Anchor href="https://prosperity.imc.com/" target="_blank" rel="noreferrer">IMC Prosperity</Anchor> algorithms.
             Its source code is available in the <Anchor href="https://github.com/jmerle/imc-prosperity-3-visualizer" target="_blank" rel="noreferrer">jmerle/imc-prosperity-3-visualizer</Anchor> GitHub repository.
-            Load an algorithm below to get started.
+            Load an official Prosperity log download or a compatible local backtest log below to get started.
           </Text>
         </HomeCard>
 
         <HomeCard title="Prerequisites">
           <Text>
-            IMC Prosperity 3 Visualizer assumes your algorithm logs in a certain format. Algorithms that use a different
-            logging format may cause unexpected errors when opening them in the visualizer. Please use the following
-            boilerplate for your algorithm (or adapt your algorithm to use the logger from this code) and use{' '}
-            <Code>logger.print()</Code> where you would normally use <Code>print()</Code>:
+            Two log formats are supported directly: official Prosperity `.log` downloads and legacy logger output in
+            the original visualizer format. If you are loading a local backtest log, it still needs to follow the
+            visualizer logger format below and use <Code>logger.print()</Code> where you would normally use{' '}
+            <Code>print()</Code>:
           </Text>
           <ScrollableCodeHighlight code={exampleCode} language="python" />
         </HomeCard>

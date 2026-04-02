@@ -23,7 +23,7 @@ export const useStore = create<State>()(
       colorScheme: 'auto',
 
       idToken: '',
-      round: 'ROUND0',
+      round: '',
 
       algorithm: null,
 

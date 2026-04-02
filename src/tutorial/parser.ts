@@ -6,6 +6,7 @@ import {
   TutorialSnapshot,
   TutorialTrade,
 } from './types.ts';
+import { extractBookSide, getCsvNumber, getCsvString, parseImcCsv } from '../utils/imcCsv.ts';
 
 interface RawPriceRow {
   day: number;
@@ -38,67 +39,38 @@ export interface SessionFileSet {
 
 const WALL_HISTORY = 40;
 
-function parseCsv(text: string): string[][] {
-  return text
-    .trim()
-    .split(/\r?\n/)
-    .filter(line => line.trim().length > 0)
-    .map(line => line.split(';'));
-}
-
-function parseOptionalNumber(value: string | undefined): number | null {
-  if (value === undefined || value === '') {
-    return null;
-  }
-
-  return Number(value);
-}
-
 function parsePriceCsv(text: string): RawPriceRow[] {
-  const rows = parseCsv(text);
+  const parsed = parseImcCsv(text);
 
-  return rows.slice(1).map(columns => {
-    const bids: BookLevel[] = [];
-    const asks: BookLevel[] = [];
-
-    for (let level = 0; level < 3; level++) {
-      const bidPrice = parseOptionalNumber(columns[3 + level * 2]);
-      const bidVolume = parseOptionalNumber(columns[4 + level * 2]);
-      const askPrice = parseOptionalNumber(columns[9 + level * 2]);
-      const askVolume = parseOptionalNumber(columns[10 + level * 2]);
-
-      if (bidPrice !== null && bidVolume !== null) {
-        bids.push({ price: bidPrice, volume: bidVolume });
-      }
-
-      if (askPrice !== null && askVolume !== null) {
-        asks.push({ price: askPrice, volume: askVolume });
-      }
-    }
+  return parsed.rows.map(columns => {
+    const bidSide = extractBookSide(columns, parsed, 'bid', [3, 5, 7], [4, 6, 8]);
+    const askSide = extractBookSide(columns, parsed, 'ask', [9, 11, 13], [10, 12, 14]);
+    const bids = bidSide.prices.map((price, index) => ({ price, volume: bidSide.volumes[index] }));
+    const asks = askSide.prices.map((price, index) => ({ price, volume: askSide.volumes[index] }));
 
     return {
-      day: Number(columns[0]),
-      timestamp: Number(columns[1]),
-      product: columns[2],
+      day: getCsvNumber(columns, parsed, ['day'], 0),
+      timestamp: getCsvNumber(columns, parsed, ['timestamp'], 1),
+      product: getCsvString(columns, parsed, ['product', 'symbol'], 2),
       bids,
       asks,
-      midPrice: Number(columns[15]),
-      profitLoss: Number(columns[16]),
+      midPrice: getCsvNumber(columns, parsed, ['mid_price', 'midprice'], 15),
+      profitLoss: getCsvNumber(columns, parsed, ['profit_and_loss', 'profit_loss', 'pnl'], 16),
     };
   });
 }
 
 function parseTradeCsv(text: string): RawTradeRow[] {
-  const rows = parseCsv(text);
+  const parsed = parseImcCsv(text);
 
-  return rows.slice(1).map(columns => ({
-    timestamp: Number(columns[0]),
-    buyer: columns[1] || null,
-    seller: columns[2] || null,
-    symbol: columns[3],
-    currency: columns[4],
-    price: Number(columns[5]),
-    quantity: Number(columns[6]),
+  return parsed.rows.map(columns => ({
+    timestamp: getCsvNumber(columns, parsed, ['timestamp'], 0),
+    buyer: getCsvString(columns, parsed, ['buyer'], 1) || null,
+    seller: getCsvString(columns, parsed, ['seller'], 2) || null,
+    symbol: getCsvString(columns, parsed, ['symbol', 'product'], 3),
+    currency: getCsvString(columns, parsed, ['currency', 'denomination'], 4),
+    price: getCsvNumber(columns, parsed, ['price'], 5),
+    quantity: getCsvNumber(columns, parsed, ['quantity', 'volume'], 6),
   }));
 }
 
@@ -335,10 +307,16 @@ function buildSession(fileSet: SessionFileSet): TutorialSession {
   };
 }
 
-export function parseTutorialDataset(fileSets: SessionFileSet[]): TutorialDataset {
+export function parseTutorialDataset(
+  fileSets: SessionFileSet[],
+  metadata: {
+    title?: string;
+    source?: string;
+  } = {},
+): TutorialDataset {
   return {
-    title: 'Tutorial Round 1 Dashboard',
-    source: 'Bundled from attached CSV files',
+    title: metadata.title ?? 'Market Data Dashboard',
+    source: metadata.source ?? 'Loaded from IMC-style CSV files',
     sessions: fileSets.map(buildSession).sort((a, b) => a.day - b.day),
   };
 }

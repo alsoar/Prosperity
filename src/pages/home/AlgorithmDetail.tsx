@@ -10,7 +10,6 @@ import { AlgorithmSummary } from '../../models.ts';
 import { useStore } from '../../store.ts';
 import {
   downloadAlgorithmLogs,
-  downloadAlgorithmResults,
   getAlgorithmLogsUrl,
   parseAlgorithmLogs,
 } from '../../utils/algorithm.tsx';
@@ -40,10 +39,6 @@ export function AlgorithmDetail({ position, algorithm, proxy }: AlgorithmDetailP
 
   const downloadLogs = useAsync<void>(async () => {
     await downloadAlgorithmLogs(algorithm.id);
-  });
-
-  const downloadResults = useAsync<void>(async () => {
-    await downloadAlgorithmResults(algorithm.id);
   });
 
   const openInVisualizer = useAsync<void>(async () => {
@@ -82,9 +77,6 @@ export function AlgorithmDetail({ position, algorithm, proxy }: AlgorithmDetailP
         <Group grow mb="xs">
           <Button variant="outline" onClick={downloadLogs.call} loading={downloadLogs.loading}>
             Download logs
-          </Button>
-          <Button variant="outline" onClick={downloadResults.call} loading={downloadResults.loading}>
-            Download results
           </Button>
           {algorithm.status === 'FINISHED' && (
             <Button onClick={openInVisualizer.call} variant="outline" loading={openInVisualizer.loading}>
