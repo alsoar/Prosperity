@@ -1,19 +1,25 @@
 {
-  "title": "Sample Market Data",
-  "source": "Bundled sample sessions in IMC prices/trades CSV format",
-  "basePath": "tutorial-round-1",
+  "title": "Round 1 Market Data",
+  "source": "Bundled Round 1 sessions in IMC prices/trades CSV format",
+  "basePath": "round-1-market-data",
   "sessions": [
     {
-      "id": "sample-day--2",
-      "label": "Sample · Day -2",
-      "priceFile": "prices_round_0_day_-2.csv",
-      "tradeFile": "trades_round_0_day_-2.csv"
+      "id": "round-1-day--2",
+      "label": "Round 1 · Day -2",
+      "priceFile": "prices_round_1_day_-2.csv",
+      "tradeFile": "trades_round_1_day_-2.csv"
     },
     {
-      "id": "sample-day--1",
-      "label": "Sample · Day -1",
-      "priceFile": "prices_round_0_day_-1.csv",
-      "tradeFile": "trades_round_0_day_-1.csv"
+      "id": "round-1-day--1",
+      "label": "Round 1 · Day -1",
+      "priceFile": "prices_round_1_day_-1.csv",
+      "tradeFile": "trades_round_1_day_-1.csv"
+    },
+    {
+      "id": "round-1-day-0",
+      "label": "Round 1 · Day 0",
+      "priceFile": "prices_round_1_day_0.csv",
+      "tradeFile": "trades_round_1_day_0.csv"
     }
   ]
 }

@@ -160,7 +160,12 @@ export function Chart({ title, options, series, min, max }: ChartProps): ReactNo
 
   return (
     <VisualizerCard p={0}>
-      <HighchartsReact highcharts={Highcharts} constructorType={'stockChart'} options={fullOptions} immutable />
+      <HighchartsReact
+        highcharts={Highcharts}
+        constructorType={'stockChart'}
+        options={fullOptions}
+        updateArgs={[true, true, false]}
+      />
     </VisualizerCard>
   );
 }

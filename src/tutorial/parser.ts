@@ -39,6 +39,10 @@ export interface SessionFileSet {
 
 const WALL_HISTORY = 40;
 
+function isMissingBookSnapshot(row: RawPriceRow): boolean {
+  return row.bids.length === 0 && row.asks.length === 0 && row.midPrice === 0;
+}
+
 function parsePriceCsv(text: string): RawPriceRow[] {
   const parsed = parseImcCsv(text);
 
@@ -156,35 +160,49 @@ function findBaseAsk(asks: BookLevel[], wallMid: number): number | null {
 
 function buildSnapshots(rawRows: RawPriceRow[]): TutorialSnapshot[] {
   const sortedRows = [...rawRows].sort((a, b) => a.timestamp - b.timestamp);
-  const openMid = sortedRows[0]?.midPrice ?? 0;
+  const firstValidRow = sortedRows.find(row => !isMissingBookSnapshot(row));
+  const openMid = firstValidRow?.midPrice ?? sortedRows[0]?.midPrice ?? 0;
   const rollingWindow: number[] = [];
   let rollingSum = 0;
   const bidWallHistory: number[] = [];
   const askWallHistory: number[] = [];
   const bidWallCounts = new Map<number, number>();
   const askWallCounts = new Map<number, number>();
+  let lastValidMid = openMid;
+  let lastValidWallMid = openMid;
+  let lastValidBaseMid = openMid;
 
   return sortedRows.map(row => {
-    rollingWindow.push(row.midPrice);
-    rollingSum += row.midPrice;
+    const missingBookSnapshot = isMissingBookSnapshot(row);
 
-    if (rollingWindow.length > 25) {
-      rollingSum -= rollingWindow.shift() ?? 0;
+    if (!missingBookSnapshot) {
+      rollingWindow.push(row.midPrice);
+      rollingSum += row.midPrice;
+
+      if (rollingWindow.length > 25) {
+        rollingSum -= rollingWindow.shift() ?? 0;
+      }
     }
 
     const bestBid = row.bids[0]?.price ?? null;
     const bestAsk = row.asks[0]?.price ?? null;
     const wallBid = detectWallPrice(row.bids, bidWallCounts, 'bid');
     const wallAsk = detectWallPrice(row.asks, askWallCounts, 'ask');
-    const wallMid =
-      wallBid !== null && wallAsk !== null ? (wallBid + wallAsk) / 2 : bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : row.midPrice;
-    const baseBid = findBaseBid(row.bids, wallMid);
-    const baseAsk = findBaseAsk(row.asks, wallMid);
-    const baseMid =
-      baseBid !== null && baseAsk !== null ? (baseBid + baseAsk) / 2 : wallMid;
+    const midPrice = missingBookSnapshot ? lastValidMid : row.midPrice;
+    const wallMid = missingBookSnapshot
+      ? lastValidWallMid
+      : wallBid !== null && wallAsk !== null
+        ? (wallBid + wallAsk) / 2
+        : bestBid !== null && bestAsk !== null
+          ? (bestBid + bestAsk) / 2
+          : midPrice;
+    const baseBid = missingBookSnapshot ? null : findBaseBid(row.bids, wallMid);
+    const baseAsk = missingBookSnapshot ? null : findBaseAsk(row.asks, wallMid);
+    const baseMid = missingBookSnapshot ? lastValidBaseMid : baseBid !== null && baseAsk !== null ? (baseBid + baseAsk) / 2 : wallMid;
     const bidVolume = row.bids.reduce((sum, level) => sum + level.volume, 0);
     const askVolume = row.asks.reduce((sum, level) => sum + level.volume, 0);
     const totalVisibleVolume = bidVolume + askVolume;
+    const rollingMid = rollingWindow.length > 0 ? rollingSum / rollingWindow.length : midPrice;
 
     if (wallBid !== null) {
       updateRollingCounts(bidWallHistory, bidWallCounts, wallBid);
@@ -194,8 +212,15 @@ function buildSnapshots(rawRows: RawPriceRow[]): TutorialSnapshot[] {
       updateRollingCounts(askWallHistory, askWallCounts, wallAsk);
     }
 
+    if (!missingBookSnapshot) {
+      lastValidMid = midPrice;
+      lastValidWallMid = wallMid;
+      lastValidBaseMid = baseMid;
+    }
+
     return {
       ...row,
+      midPrice,
       bestBid,
       bestAsk,
       wallBid,
@@ -205,7 +230,7 @@ function buildSnapshots(rawRows: RawPriceRow[]): TutorialSnapshot[] {
       spread: bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null,
       bookImbalance: totalVisibleVolume === 0 ? 0 : (bidVolume - askVolume) / totalVisibleVolume,
       openMid,
-      rollingMid: rollingSum / rollingWindow.length,
+      rollingMid,
       wallMid,
       baseMid,
     };

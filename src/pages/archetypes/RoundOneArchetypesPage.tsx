@@ -156,6 +156,22 @@ function formatDay(day: number): string {
   return `Day ${day}`;
 }
 
+function formatDayRange(days: number[]): string {
+  if (days.length === 0) {
+    return 'Unknown sessions';
+  }
+
+  if (days.length === 1) {
+    return formatDay(days[0]);
+  }
+
+  if (days.length === 2) {
+    return `${formatDay(days[0])} and ${formatDay(days[1])}`;
+  }
+
+  return `${days.slice(0, -1).map(formatDay).join(', ')}, and ${formatDay(days[days.length - 1])}`;
+}
+
 function flowLabel(value: string): string {
   switch (value) {
     case 'dense recurring':
@@ -548,6 +564,19 @@ export function RoundOneArchetypesPage(): ReactNode {
     [filteredActors],
   );
 
+  const datasetTitle = useMemo(() => {
+    const roundLabel = payload?.round !== null && payload?.round !== undefined ? `Round ${formatNumber(payload.round, 0)}` : 'Archetype';
+    const scopeLabel = payload?.scope === 'anonymous' ? 'Anonymous' : payload?.scope ?? 'Unknown';
+    return `${roundLabel} ${scopeLabel} Archetypes`;
+  }, [payload?.round, payload?.scope]);
+
+  const datasetSubtitle = useMemo(() => {
+    const productList = (payload?.summary.products ?? []).map(product => product.product).join(' · ');
+    return productList.length > 0 ? productList : 'No products in scope';
+  }, [payload?.summary.products]);
+
+  const daysSummary = useMemo(() => formatDayRange(payload?.summary.days ?? []), [payload?.summary.days]);
+
   const convictionSeries = useMemo(
     () =>
       buildConvictionSeries(visibleActors, deferredSortMode, actorId => {
@@ -574,8 +603,8 @@ export function RoundOneArchetypesPage(): ReactNode {
   if (error || !payload) {
     return (
       <Container size="xl" py="xl">
-        <Alert color="red" icon={<IconAlertCircle size={16} />} title="Round 1 archetypes unavailable">
-          {error ?? 'The Round 1 archetype payload could not be loaded.'}
+        <Alert color="red" icon={<IconAlertCircle size={16} />} title="Archetypes unavailable">
+          {error ?? 'The archetype payload could not be loaded.'}
         </Alert>
       </Container>
     );
@@ -586,14 +615,14 @@ export function RoundOneArchetypesPage(): ReactNode {
       <Container size="xl" className={classes.container}>
         <Stack gap="xl">
           <Paper radius="xl" className={classes.hero}>
-            <Text className={classes.eyebrow}>Prosperity 3 · Round 1</Text>
+            <Text className={classes.eyebrow}>{datasetSubtitle}</Text>
             <Title order={1} className={classes.headline}>
-              Latent Archetype Board
+              {datasetTitle}
             </Title>
             <Text className={classes.lede}>
-              This view takes the anonymous Round 1 detector outputs and assembles them into ranked hidden-trader
-              archetypes. Each card is a live-use hypothesis: product, size family, flow style, and a plain-English
-              read of what the screener thinks is happening.
+              This view takes the currently bundled detector outputs and assembles them into ranked hidden-trader
+              archetypes. Each card is a working hypothesis: product, size family, flow style, and a plain-English read
+              of what the screener thinks is happening.
             </Text>
 
             <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} mt="lg">
@@ -601,14 +630,14 @@ export function RoundOneArchetypesPage(): ReactNode {
                 <Text className={classes.statLabel}>Visible Archetypes</Text>
                 <Text className={classes.statValue}>{formatNumber(filteredActors.length)}</Text>
                 <Text size="sm" className={classes.subtle}>
-                  Filtered from {formatNumber(payload.summary.actorCount)} Round 1 actor candidates.
+                  Filtered from {formatNumber(payload.summary.actorCount)} actor candidates.
                 </Text>
               </Paper>
               <Paper className={classes.statCard} radius="lg">
                 <Text className={classes.statLabel}>Flagged Events</Text>
                 <Text className={classes.statValue}>{formatNumber(filteredEventCount)}</Text>
                 <Text size="sm" className={classes.subtle}>
-                  Anonymous events across Day -2, Day -1, and Day 0.
+                  {payload.scope} events across {daysSummary}.
                 </Text>
               </Paper>
               <Paper className={classes.statCard} radius="lg">
@@ -805,7 +834,7 @@ export function RoundOneArchetypesPage(): ReactNode {
                     <Text size="sm" className={classes.subtle}>
                       Sorted by{' '}
                       {deferredSortMode === 'conviction'
-                        ? 'Round 1 conviction'
+                        ? 'conviction'
                         : deferredSortMode === 'profitability'
                         ? 'cumulative edge proxy'
                         : 'average edge per flagged event'}
@@ -849,7 +878,7 @@ export function RoundOneArchetypesPage(): ReactNode {
                             <div>
                               <Text ta="right" size="xs" className={classes.subtle}>
                                 {deferredSortMode === 'conviction'
-                                  ? 'Round 1 conviction'
+                                  ? 'Conviction'
                                   : deferredSortMode === 'profitability'
                                   ? 'Cumulative edge proxy'
                                   : 'Average edge / event'}
@@ -964,7 +993,7 @@ export function RoundOneArchetypesPage(): ReactNode {
 
                     <SimpleGrid cols={{ base: 1, md: 2, xl: 4 }} mt="lg">
                       <Paper className={classes.statCard} radius="lg">
-                        <Text className={classes.statLabel}>Round 1 Conviction</Text>
+                        <Text className={classes.statLabel}>Conviction</Text>
                         <Text className={classes.statValue}>{formatNumber(selectedActor.round1ConvictionScore, 2)}</Text>
                         <Text size="sm" className={classes.subtle}>
                           Base actor score {formatNumber(selectedActor.overallActorScore, 2)}

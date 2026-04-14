@@ -769,7 +769,7 @@ export function DashboardPage(): ReactNode {
       })
       .catch(err => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load the sample market dataset');
+          setError(err instanceof Error ? err.message : 'Could not load the bundled market dataset');
         }
       });
 
@@ -1197,58 +1197,136 @@ export function DashboardPage(): ReactNode {
     );
   }
 
-  const marketOptions: Highcharts.Options = {
-    chart: {
-      height: 560,
-    },
-    tooltip: {
-      shared: false,
-      useHTML: true,
-      formatter: buildTooltip(normalization),
-    },
-    plotOptions: {
-      series: {
-        turboThreshold: 0,
-        stickyTracking: false,
-        dataGrouping: {
-          enabled: false,
+  const marketOptions = useMemo<Highcharts.Options>(
+    () => ({
+      chart: {
+        height: 560,
+      },
+      tooltip: {
+        shared: false,
+        useHTML: true,
+        formatter: buildTooltip(normalization),
+      },
+      plotOptions: {
+        series: {
+          turboThreshold: 0,
+          stickyTracking: false,
+          dataGrouping: {
+            enabled: false,
+          },
+          point: {
+            events: {
+              mouseOver() {
+                if (typeof this.x === 'number') {
+                  setActiveTimestamp(currentTimestamp => (currentTimestamp === this.x ? currentTimestamp : this.x));
+                }
+              },
+            },
+          },
         },
-        point: {
-          events: {
-            mouseOver() {
-              if (typeof this.x === 'number') {
-                setActiveTimestamp(this.x);
-              }
+        scatter: {
+          states: {
+            inactive: {
+              enabled: false,
             },
           },
         },
       },
-      scatter: {
-        states: {
-          inactive: {
-            enabled: false,
+      yAxis: {
+        title: {
+          text: normalization === 'none' ? 'Price' : `Price delta vs ${normalization}`,
+        },
+        allowDecimals: true,
+        labels: {
+          formatter() {
+            return formatSigned(Number(this.value), 1);
           },
         },
       },
-    },
-    yAxis: {
-      title: {
-        text: normalization === 'none' ? 'Price' : `Price delta vs ${normalization}`,
+      xAxis: {
+        ...marketTimelineAxis,
       },
-      allowDecimals: true,
-      labels: {
-        formatter() {
-          return formatSigned(Number(this.value), normalization === 'none' ? 1 : 1);
+      legend: {
+        enabled: true,
+      },
+    }),
+    [marketTimelineAxis, normalization],
+  );
+
+  const pnlChartOptions = useMemo<Highcharts.Options>(
+    () => ({
+      chart: {
+        height: 240,
+      },
+      plotOptions: {
+        series: {
+          dataGrouping: {
+            enabled: false,
+          },
+          point: {
+            events: {
+              mouseOver() {
+                if (typeof this.x === 'number') {
+                  setActiveTimestamp(currentTimestamp => (currentTimestamp === this.x ? currentTimestamp : this.x));
+                }
+              },
+            },
+          },
         },
       },
-    },
-    xAxis: {
-      ...marketTimelineAxis,
-    },
-    legend: {
-      enabled: true,
-    },
-  };
+      xAxis: {
+        ...marketTimelineAxis,
+      },
+      yAxis: {
+        title: {
+          text: 'PnL',
+        },
+        allowDecimals: true,
+      },
+      legend: {
+        enabled: false,
+      },
+    }),
+    [marketTimelineAxis],
+  );
+
+  const spreadScreenerOptions = useMemo<Highcharts.Options>(
+    () => ({
+      chart: {
+        height: 320,
+      },
+      yAxis: {
+        title: {
+          text: 'Basis points vs ref',
+        },
+        allowDecimals: true,
+        labels: {
+          formatter() {
+            return `${formatSigned(Number(this.value), 1)} bps`;
+          },
+        },
+      },
+    }),
+    [],
+  );
+
+  const flowChartOptions = useMemo<Highcharts.Options>(
+    () => ({
+      chart: {
+        height: 320,
+      },
+      yAxis: {
+        title: {
+          text: 'Signed quantity',
+        },
+        allowDecimals: false,
+      },
+      legend: {
+        enabled: false,
+      },
+    }),
+    [],
+  );
 
   return (
     <Box className={classes.shell}>
@@ -1260,7 +1338,7 @@ export function DashboardPage(): ReactNode {
                 <Text className={classes.eyebrow}>Prosperity Desk</Text>
                 <Title className={classes.headline}>{dataset.title}</Title>
                 <Text size="lg" className={classes.lede}>
-                  This desk is built for IMC-style `prices` and `trades` CSVs. It starts from bundled sample sessions,
+                  This desk is built for IMC-style `prices` and `trades` CSVs. It starts from bundled market sessions,
                   and it can also replay backtest logs in the same view so you can inspect the market, your quotes,
                   your fills, and the trades that hit you in one synchronized chart.
                 </Text>
@@ -1325,39 +1403,7 @@ export function DashboardPage(): ReactNode {
                   <Chart
                     title={hasBacktestPnl ? 'Backtest profit and loss' : 'Provided profit and loss'}
                     series={pnlSeries}
-                    options={{
-                      chart: {
-                        height: 240,
-                      },
-                      plotOptions: {
-                        series: {
-                          dataGrouping: {
-                            enabled: false,
-                          },
-                          point: {
-                            events: {
-                              mouseOver() {
-                                if (typeof this.x === 'number') {
-                                  setActiveTimestamp(this.x);
-                                }
-                              },
-                            },
-                          },
-                        },
-                      },
-                      xAxis: {
-                        ...marketTimelineAxis,
-                      },
-                      yAxis: {
-                        title: {
-                          text: 'PnL',
-                        },
-                        allowDecimals: true,
-                      },
-                      legend: {
-                        enabled: false,
-                      },
-                    }}
+                    options={pnlChartOptions}
                   />
                   <Text size="sm" mt="sm" className={classes.subtle}>
                     {pnlDescription}
@@ -1410,7 +1456,7 @@ export function DashboardPage(): ReactNode {
                           />
                         </Button>
                         <Button variant="light" color="gray" onClick={resetToBundledDataset} disabled={!bundledDataset}>
-                          Reset to sample
+                          Reset to bundled data
                         </Button>
                       </Group>
                       <Text size="sm" className={classes.subtle}>
@@ -1623,22 +1669,7 @@ export function DashboardPage(): ReactNode {
                 <Chart
                   title={`Bid/ask distances vs ${indicatorLabel(spreadNormalization)}`}
                   series={spreadScreenerSeries}
-                  options={{
-                    chart: {
-                      height: 320,
-                    },
-                    yAxis: {
-                      title: {
-                        text: 'Basis points vs ref',
-                      },
-                      allowDecimals: true,
-                      labels: {
-                        formatter() {
-                          return `${formatSigned(Number(this.value), 1)} bps`;
-                        },
-                      },
-                    },
-                  }}
+                  options={spreadScreenerOptions}
                 />
                 <Text size="sm" mt="sm" className={classes.subtle}>
                   This panel normalizes best and wall quote distances relative to either raw mid or inferred wallmid so
@@ -1653,20 +1684,7 @@ export function DashboardPage(): ReactNode {
                 <Chart
                   title="Cumulative signed trade flow"
                   series={flowSeries}
-                  options={{
-                    chart: {
-                      height: 320,
-                    },
-                    yAxis: {
-                      title: {
-                        text: 'Signed quantity',
-                      },
-                      allowDecimals: false,
-                    },
-                    legend: {
-                      enabled: false,
-                    },
-                  }}
+                  options={flowChartOptions}
                 />
                 <Text size="sm" mt="sm" className={classes.subtle}>
                   Positive values mean the inferred aggressor flow is buyer-led; negative values mean seller-led.
