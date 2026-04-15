@@ -48,7 +48,7 @@ def cli(
     data: Annotated[
         Optional[Path],
         Option(
-            help="Path to data directory. If it contains round0/, that round0 directory is used as the actual calibration source.",
+            help="Path to round-1 data directory. If it contains round1/, that round1 directory is used as the calibration source.",
             show_default=False,
             exists=True,
             file_okay=False,
@@ -67,7 +67,8 @@ def cli(
     sessions: Annotated[int, Option("--sessions", help="Number of Monte Carlo sessions to run.")] = 100,
     fv_mode: Annotated[str, Option("--fv-mode", help="Fair-value mode for the Rust simulator.")] = "simulate",
     trade_mode: Annotated[str, Option("--trade-mode", help="Trade-arrival mode for the Rust simulator.")] = "simulate",
-    tomato_support: Annotated[str, Option("--tomato-support", help="Latent fair support for tomatoes in simulate mode.")] = "quarter",
+    osmium_phi: Annotated[float, Option("--osmium-phi", help="AR(1) persistence target for ASH_COATED_OSMIUM in simulate mode.")] = 0.99778,
+    osmium_sigma: Annotated[float, Option("--osmium-sigma", help="Innovation sigma target for ASH_COATED_OSMIUM in simulate mode.")] = 0.312,
     seed: Annotated[int, Option("--seed", help="RNG seed for the Rust simulator.")] = 20260401,
     python_bin: Annotated[
         str,
@@ -77,6 +78,16 @@ def cli(
         int,
         Option("--sample-sessions", help="Number of sessions to persist with full path/trace data for dashboard charts."),
     ] = 10,
+    dro: Annotated[bool, Option("--dro", help="Enable robust phi/sigma family evaluation over a calibrated confidence region.")] = False,
+    dro_phi_min: Annotated[Optional[float], Option("--dro-phi-min", help="Lower bound of the osmium phi grid used for robust evaluation.")] = None,
+    dro_phi_max: Annotated[Optional[float], Option("--dro-phi-max", help="Upper bound of the osmium phi grid used for robust evaluation.")] = None,
+    dro_phi_steps: Annotated[int, Option("--dro-phi-steps", help="Number of phi grid points for robust evaluation.")] = 5,
+    dro_sigma_min: Annotated[Optional[float], Option("--dro-sigma-min", help="Lower bound of the osmium sigma grid used for robust evaluation.")] = None,
+    dro_sigma_max: Annotated[Optional[float], Option("--dro-sigma-max", help="Upper bound of the osmium sigma grid used for robust evaluation.")] = None,
+    dro_sigma_steps: Annotated[int, Option("--dro-sigma-steps", help="Number of sigma grid points for robust evaluation.")] = 5,
+    dro_confidence: Annotated[float, Option("--dro-confidence", help="Confidence level for the phi/sigma plausibility region.")] = 0.90,
+    dro_calibration_paths: Annotated[int, Option("--dro-calibration-paths", help="Number of simulated osmium paths per grid point for confidence-region scoring.")] = 96,
+    dro_max_scenarios: Annotated[int, Option("--dro-max-scenarios", help="Maximum number of accepted robust scenarios to run through full MC.")] = 9,
     version: Annotated[
         bool,
         Option("--version", "-v", help="Show the program's version number and exit.", is_eager=True, callback=version_callback),
@@ -105,10 +116,21 @@ def cli(
         sessions=sessions,
         fv_mode=fv_mode,
         trade_mode=trade_mode,
-        tomato_support=tomato_support,
+        osmium_phi=osmium_phi,
+        osmium_sigma=osmium_sigma,
         seed=seed,
         python_bin=python_bin,
         sample_sessions=sample_sessions,
+        dro=dro,
+        dro_phi_min=dro_phi_min,
+        dro_phi_max=dro_phi_max,
+        dro_phi_steps=dro_phi_steps,
+        dro_sigma_min=dro_sigma_min,
+        dro_sigma_max=dro_sigma_max,
+        dro_sigma_steps=dro_sigma_steps,
+        dro_confidence=dro_confidence,
+        dro_calibration_paths=dro_calibration_paths,
+        dro_max_scenarios=dro_max_scenarios,
     )
 
     total_stats = dashboard["overall"]["totalPnl"]

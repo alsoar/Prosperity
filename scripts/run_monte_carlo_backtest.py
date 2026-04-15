@@ -13,7 +13,18 @@ def main() -> None:
     parser.add_argument("--output", default="tmp/strategy_backtests")
     parser.add_argument("--fv-mode", default="simulate", choices=["simulate", "replay"])
     parser.add_argument("--trade-mode", default="simulate", choices=["simulate", "replay-times"])
-    parser.add_argument("--tomato-support", default="quarter", choices=["continuous", "half", "quarter", "0.5", "0.25"])
+    parser.add_argument("--osmium-phi", type=float, default=0.99778)
+    parser.add_argument("--osmium-sigma", type=float, default=0.312)
+    parser.add_argument("--dro", action="store_true")
+    parser.add_argument("--dro-phi-min", type=float)
+    parser.add_argument("--dro-phi-max", type=float)
+    parser.add_argument("--dro-phi-steps", type=int, default=5)
+    parser.add_argument("--dro-sigma-min", type=float)
+    parser.add_argument("--dro-sigma-max", type=float)
+    parser.add_argument("--dro-sigma-steps", type=int, default=5)
+    parser.add_argument("--dro-confidence", type=float, default=0.90)
+    parser.add_argument("--dro-calibration-paths", type=int, default=96)
+    parser.add_argument("--dro-max-scenarios", type=int, default=9)
     parser.add_argument("--seed", type=int, default=20260401)
     args = parser.parse_args()
 
@@ -37,11 +48,33 @@ def main() -> None:
         args.fv_mode,
         "--trade-mode",
         args.trade_mode,
-        "--tomato-support",
-        args.tomato_support,
+        "--osmium-phi",
+        str(args.osmium_phi),
+        "--osmium-sigma",
+        str(args.osmium_sigma),
         "--seed",
         str(args.seed),
     ]
+    if args.dro:
+        cmd.append("--dro")
+    for flag in ("dro_phi_min", "dro_phi_max", "dro_sigma_min", "dro_sigma_max"):
+        value = getattr(args, flag)
+        if value is not None:
+            cmd.extend([f"--{flag.replace('_', '-')}", str(value)])
+    cmd.extend(
+        [
+            "--dro-phi-steps",
+            str(args.dro_phi_steps),
+            "--dro-sigma-steps",
+            str(args.dro_sigma_steps),
+            "--dro-confidence",
+            str(args.dro_confidence),
+            "--dro-calibration-paths",
+            str(args.dro_calibration_paths),
+            "--dro-max-scenarios",
+            str(args.dro_max_scenarios),
+        ]
+    )
     subprocess.run(cmd, cwd=rust_dir, check=True)
 
     summary = pd.read_csv(output_dir / "session_summary.csv")

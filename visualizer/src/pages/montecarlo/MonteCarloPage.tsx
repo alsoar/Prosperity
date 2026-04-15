@@ -36,6 +36,14 @@ function withVersion(url: string, version: string | null): string {
   return `${url}${separator}v=${encodeURIComponent(version)}`;
 }
 
+function monteCarloProductLabel(dashboard: MonteCarloDashboard, product: string): string {
+  return dashboard.meta.productLabels?.[product] ?? product;
+}
+
+function monteCarloProductColor(product: string): string {
+  return product === 'EMERALDS' ? '#12b886' : '#fd7e14';
+}
+
 type LocalDashboardStatus = {
   dashboardExists: boolean;
   dashboardMtimeMs: number | null;
@@ -231,23 +239,31 @@ export function MonteCarloPage(): ReactNode {
   }
 
   const strategyName = basename(dashboard.meta.algorithmPath);
+  const emeraldLabel = monteCarloProductLabel(dashboard, 'EMERALDS');
+  const tomatoLabel = monteCarloProductLabel(dashboard, 'TOMATOES');
+  const selectedBandLabel = monteCarloProductLabel(dashboard, bandProduct);
+  const tailRisk = dashboard.tailRisk;
+  const robust = dashboard.robust;
   const totalTrend = dashboard.trendFits.TOTAL;
   const emeraldTrend = dashboard.trendFits.EMERALDS;
   const tomatoTrend = dashboard.trendFits.TOMATOES;
   const scatterFit = dashboard.scatterFit;
   const selectedBandSeries = dashboard.bandSeries?.[bandProduct];
-  const bandOptions = Object.keys(dashboard.bandSeries ?? {}).map(product => ({ value: product, label: product }));
+  const bandOptions = Object.keys(dashboard.bandSeries ?? {}).map(product => ({
+    value: product,
+    label: monteCarloProductLabel(dashboard, product),
+  }));
 
   const totalHistogramSeries: Highcharts.SeriesOptionsType[] = [
     histogramSeries(dashboard.histograms.totalPnl, 'Total PnL', '#4c6ef5'),
     normalFitSeries(dashboard.normalFits.totalPnl),
   ];
   const emeraldHistogramSeries: Highcharts.SeriesOptionsType[] = [
-    histogramSeries(dashboard.histograms.emeraldPnl, 'EMERALDS PnL', '#12b886'),
+    histogramSeries(dashboard.histograms.emeraldPnl, `${emeraldLabel} PnL`, '#12b886'),
     normalFitSeries(dashboard.normalFits.emeraldPnl),
   ];
   const tomatoHistogramSeries: Highcharts.SeriesOptionsType[] = [
-    histogramSeries(dashboard.histograms.tomatoPnl, 'TOMATOES PnL', '#fd7e14'),
+    histogramSeries(dashboard.histograms.tomatoPnl, `${tomatoLabel} PnL`, '#fd7e14'),
     normalFitSeries(dashboard.normalFits.tomatoPnl),
   ];
   const scatterSeries: Highcharts.SeriesOptionsType[] = [
@@ -267,14 +283,18 @@ export function MonteCarloPage(): ReactNode {
   ];
   const profitabilitySeries: Highcharts.SeriesOptionsType[] = [
     distributionLineSeries(dashboard.histograms.totalProfitability, 'Total', '#4c6ef5'),
-    distributionLineSeries(dashboard.histograms.emeraldProfitability, 'EMERALDS', '#12b886'),
-    distributionLineSeries(dashboard.histograms.tomatoProfitability, 'TOMATOES', '#fd7e14'),
+    distributionLineSeries(dashboard.histograms.emeraldProfitability, emeraldLabel, '#12b886'),
+    distributionLineSeries(dashboard.histograms.tomatoProfitability, tomatoLabel, '#fd7e14'),
   ];
   const stabilitySeries: Highcharts.SeriesOptionsType[] = [
     distributionLineSeries(dashboard.histograms.totalStability, 'Total', '#4c6ef5'),
-    distributionLineSeries(dashboard.histograms.emeraldStability, 'EMERALDS', '#12b886'),
-    distributionLineSeries(dashboard.histograms.tomatoStability, 'TOMATOES', '#fd7e14'),
+    distributionLineSeries(dashboard.histograms.emeraldStability, emeraldLabel, '#12b886'),
+    distributionLineSeries(dashboard.histograms.tomatoStability, tomatoLabel, '#fd7e14'),
   ];
+  const robustP05Series: Highcharts.SeriesOptionsType[] =
+    robust === undefined
+      ? []
+      : [histogramSeries(robust.p05Histograms.totalPnl, 'Accepted scenario total P05', '#fa5252')];
 
   return (
     <Container fluid py="md">
@@ -341,8 +361,8 @@ export function MonteCarloPage(): ReactNode {
                   <Table.Th>Metric</Table.Th>
                   <Table.Th>Meaning</Table.Th>
                   <Table.Th>Total</Table.Th>
-                  <Table.Th>EMERALDS</Table.Th>
-                  <Table.Th>TOMATOES</Table.Th>
+                  <Table.Th>{emeraldLabel}</Table.Th>
+                  <Table.Th>{tomatoLabel}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -384,7 +404,7 @@ export function MonteCarloPage(): ReactNode {
             <Table withTableBorder withColumnBorders>
               <Table.Tbody>
                 <Table.Tr>
-                  <Table.Td>EMERALDS</Table.Td>
+                  <Table.Td>{emeraldLabel}</Table.Td>
                   <Table.Td>
                     <Text fw={500}>{dashboard.generatorModel.EMERALDS.formula}</Text>
                     <Text size="sm" c="dimmed">
@@ -393,7 +413,7 @@ export function MonteCarloPage(): ReactNode {
                   </Table.Td>
                 </Table.Tr>
                 <Table.Tr>
-                  <Table.Td>TOMATOES</Table.Td>
+                  <Table.Td>{tomatoLabel}</Table.Td>
                   <Table.Td>
                     <Text fw={500}>{dashboard.generatorModel.TOMATOES.formula}</Text>
                     <Text size="sm" c="dimmed">
@@ -410,11 +430,52 @@ export function MonteCarloPage(): ReactNode {
           <SummaryTable title="Total PnL Summary" stats={dashboard.overall.totalPnl} />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }}>
-          <SummaryTable title="EMERALDS PnL Summary" stats={dashboard.products.EMERALDS.pnl} />
+          <SummaryTable title={`${emeraldLabel} PnL Summary`} stats={dashboard.products.EMERALDS.pnl} />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }}>
-          <SummaryTable title="TOMATOES PnL Summary" stats={dashboard.products.TOMATOES.pnl} />
+          <SummaryTable title={`${tomatoLabel} PnL Summary`} stats={dashboard.products.TOMATOES.pnl} />
         </Grid.Col>
+
+        {tailRisk !== undefined && (
+          <Grid.Col span={12}>
+            <VisualizerCard title="Tail Risk">
+              <Table striped withTableBorder withColumnBorders>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Product</Table.Th>
+                    <Table.Th>P05</Table.Th>
+                    <Table.Th>CVaR95</Table.Th>
+                    <Table.Th>P01</Table.Th>
+                    <Table.Th>CVaR99</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  <Table.Tr>
+                    <Table.Td>Total</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.totalPnl.p05, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.totalPnl.cvar95, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.totalPnl.p01, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.totalPnl.cvar99, 2)}</Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Td>{emeraldLabel}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.emeraldPnl.p05, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.emeraldPnl.cvar95, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.emeraldPnl.p01, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.emeraldPnl.cvar99, 2)}</Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Td>{tomatoLabel}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.tomatoPnl.p05, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.tomatoPnl.cvar95, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.tomatoPnl.p01, 2)}</Table.Td>
+                    <Table.Td>{formatNumber(tailRisk.tomatoPnl.cvar99, 2)}</Table.Td>
+                  </Table.Tr>
+                </Table.Tbody>
+              </Table>
+            </VisualizerCard>
+          </Grid.Col>
+        )}
 
         <Grid.Col span={{ base: 12, md: 6 }}>
           <SimpleChart
@@ -433,29 +494,29 @@ export function MonteCarloPage(): ReactNode {
             subtitle={`corr ${formatNumber(scatterFit.correlation, 3)} · fit R² ${formatNumber(scatterFit.r2, 3)} · ${scatterFit.diagnosis}`}
             series={scatterSeries}
             options={{
-              xAxis: { title: { text: 'EMERALDS pnl' } },
-              yAxis: { title: { text: 'TOMATOES pnl' } },
+              xAxis: { title: { text: `${emeraldLabel} pnl` } },
+              yAxis: { title: { text: `${tomatoLabel} pnl` } },
             }}
           />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 6 }}>
           <SimpleChart
-            title="EMERALDS PnL Distribution"
+            title={`${emeraldLabel} PnL Distribution`}
             subtitle={`Normal fit μ ${formatNumber(dashboard.normalFits.emeraldPnl.mean)} · σ ${formatNumber(dashboard.normalFits.emeraldPnl.std)} · R² ${formatNumber(dashboard.normalFits.emeraldPnl.r2, 3)}`}
             series={emeraldHistogramSeries}
             options={{
-              xAxis: { title: { text: 'EMERALDS final pnl' } },
+              xAxis: { title: { text: `${emeraldLabel} final pnl` } },
               yAxis: { title: { text: 'Session count' } },
             }}
           />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 6 }}>
           <SimpleChart
-            title="TOMATOES PnL Distribution"
+            title={`${tomatoLabel} PnL Distribution`}
             subtitle={`Normal fit μ ${formatNumber(dashboard.normalFits.tomatoPnl.mean)} · σ ${formatNumber(dashboard.normalFits.tomatoPnl.std)} · R² ${formatNumber(dashboard.normalFits.tomatoPnl.r2, 3)}`}
             series={tomatoHistogramSeries}
             options={{
-              xAxis: { title: { text: 'TOMATOES final pnl' } },
+              xAxis: { title: { text: `${tomatoLabel} final pnl` } },
               yAxis: { title: { text: 'Session count' } },
             }}
           />
@@ -499,11 +560,101 @@ export function MonteCarloPage(): ReactNode {
         </Grid.Col>
 
         <Grid.Col span={{ base: 12, md: 6 }}>
-          <SessionRankingTable title="Best Sessions" rows={dashboard.topSessions} />
+          <SessionRankingTable title="Best Sessions" rows={dashboard.topSessions} productLabels={dashboard.meta.productLabels} />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 6 }}>
-          <SessionRankingTable title="Worst Sessions" rows={dashboard.bottomSessions} />
+          <SessionRankingTable title="Worst Sessions" rows={dashboard.bottomSessions} productLabels={dashboard.meta.productLabels} />
         </Grid.Col>
+
+        {robust !== undefined && robust.enabled && (
+          <>
+            <Grid.Col span={{ base: 12, lg: 6 }}>
+              <VisualizerCard title="Robust Summary">
+                <Table striped withTableBorder withColumnBorders>
+                  <Table.Tbody>
+                    <Table.Tr>
+                      <Table.Td>Confidence region</Table.Td>
+                      <Table.Td>{formatNumber(100 * robust.grid.confidenceLevel, 1)}%</Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td>Accepted scenarios</Table.Td>
+                      <Table.Td>
+                        {robust.grid.acceptedCount} / {robust.grid.totalCount}
+                      </Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td>Weighted total mean</Table.Td>
+                      <Table.Td>{formatNumber(robust.weightedMixture.totalPnl.mean, 2)}</Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td>Weighted total P05</Table.Td>
+                      <Table.Td>{formatNumber(robust.weightedMixture.totalPnl.p05, 2)}</Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td>Weighted total CVaR95</Table.Td>
+                      <Table.Td>{formatNumber(robust.weightedMixture.totalPnl.cvar95, 2)}</Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td>Worst-case total P05</Table.Td>
+                      <Table.Td>
+                        {formatNumber(robust.worstCase.totalP05.totalPnl.p05, 2)} at
+                        {' '}
+                        φ={formatNumber(robust.worstCase.totalP05.phi, 6)}, σ={formatNumber(robust.worstCase.totalP05.sigma, 3)}
+                      </Table.Td>
+                    </Table.Tr>
+                    <Table.Tr>
+                      <Table.Td>Best-fit point</Table.Td>
+                      <Table.Td>
+                        φ={formatNumber(robust.bestFit.phi, 6)}, σ={formatNumber(robust.bestFit.sigma, 3)}
+                      </Table.Td>
+                    </Table.Tr>
+                  </Table.Tbody>
+                </Table>
+              </VisualizerCard>
+            </Grid.Col>
+            <Grid.Col span={{ base: 12, lg: 6 }}>
+              <SimpleChart
+                title="Scenario Total P05 Distribution"
+                subtitle={`Accepted confidence-region scenarios · mean ${formatNumber(robust.p05Distributions.totalPnl.mean, 2)} · std ${formatNumber(robust.p05Distributions.totalPnl.std, 2)}`}
+                series={robustP05Series}
+                options={{
+                  xAxis: { title: { text: 'Scenario total P05' } },
+                  yAxis: { title: { text: 'Scenario count' } },
+                }}
+              />
+            </Grid.Col>
+            <Grid.Col span={12}>
+              <VisualizerCard title="Accepted Robust Scenarios">
+                <Table striped withTableBorder withColumnBorders stickyHeader stickyHeaderOffset={0}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Phi</Table.Th>
+                      <Table.Th>Sigma</Table.Th>
+                      <Table.Th>Confidence Stat</Table.Th>
+                      <Table.Th>Weight</Table.Th>
+                      <Table.Th>Total Mean</Table.Th>
+                      <Table.Th>Total P05</Table.Th>
+                      <Table.Th>Total CVaR95</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {robust.acceptedScenarios.map(row => (
+                      <Table.Tr key={row.id}>
+                        <Table.Td>{formatNumber(row.phi, 6)}</Table.Td>
+                        <Table.Td>{formatNumber(row.sigma, 3)}</Table.Td>
+                        <Table.Td>{formatNumber(row.confidenceStatistic, 3)}</Table.Td>
+                        <Table.Td>{formatNumber(100 * row.normalizedWeight, 1)}%</Table.Td>
+                        <Table.Td>{formatNumber(row.totalPnl.mean, 2)}</Table.Td>
+                        <Table.Td>{formatNumber(row.totalPnl.p05, 2)}</Table.Td>
+                        <Table.Td>{formatNumber(row.totalPnl.cvar95, 2)}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </VisualizerCard>
+            </Grid.Col>
+          </>
+        )}
 
         {selectedBandSeries && (
           <>
@@ -525,8 +676,8 @@ export function MonteCarloPage(): ReactNode {
             </Grid.Col>
             <Grid.Col span={12}>
               <SimpleChart
-                title={`${bandProduct} Fair Value`}
-                series={buildBandChartSeries(selectedBandSeries.fair, bandProduct === 'EMERALDS' ? '#12b886' : '#fd7e14')}
+                title={`${selectedBandLabel} Fair Value`}
+                series={buildBandChartSeries(selectedBandSeries.fair, monteCarloProductColor(bandProduct))}
                 options={{
                   xAxis: {
                     title: { text: 'Step' },
@@ -537,9 +688,9 @@ export function MonteCarloPage(): ReactNode {
             </Grid.Col>
             <Grid.Col span={12}>
               <SimpleChart
-                title={`${bandProduct} MTM PnL`}
+                title={`${selectedBandLabel} MTM PnL`}
                 series={[
-                  ...buildBandChartSeries(selectedBandSeries.mtmPnl, bandProduct === 'EMERALDS' ? '#12b886' : '#fd7e14'),
+                  ...buildBandChartSeries(selectedBandSeries.mtmPnl, monteCarloProductColor(bandProduct)),
                   lineSeries('Zero', '#868e96', selectedBandSeries.mtmPnl.timestamps, selectedBandSeries.mtmPnl.timestamps.map(() => 0), 'ShortDash'),
                 ]}
                 options={{
@@ -552,9 +703,9 @@ export function MonteCarloPage(): ReactNode {
             </Grid.Col>
             <Grid.Col span={12}>
               <SimpleChart
-                title={`${bandProduct} Position`}
+                title={`${selectedBandLabel} Position`}
                 series={[
-                  ...buildBandChartSeries(selectedBandSeries.position, bandProduct === 'EMERALDS' ? '#12b886' : '#fd7e14'),
+                  ...buildBandChartSeries(selectedBandSeries.position, monteCarloProductColor(bandProduct)),
                   lineSeries('Zero', '#868e96', selectedBandSeries.position.timestamps, selectedBandSeries.position.timestamps.map(() => 0), 'ShortDash'),
                 ]}
                 options={{

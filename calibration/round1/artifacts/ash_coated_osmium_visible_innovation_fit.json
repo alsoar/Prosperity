@@ -1,0 +1,35 @@
+{
+  "dataset": {
+    "days": 3.0,
+    "ticks_total": 30000.0,
+    "observable_valid_ticks": 29199.0,
+    "observable_strong_ticks": 27707.0,
+    "observable_strong_rate": 0.9235666666666666
+  },
+  "model": {
+    "mu": 10000.0,
+    "phi": 0.99,
+    "sigma_mle": 0.32066519424845275,
+    "observation_model": "visible-book interval midpoint with variance width^2 / 12"
+  },
+  "fit": {
+    "sigma": 0.32066519424845275,
+    "log_likelihood": -13387.223796631515,
+    "success": true,
+    "iterations": 9
+  },
+  "smoothed_residual_summary": {
+    "count": 29997.0,
+    "mean": 0.0023642437015779657,
+    "std": 0.27079719365878263,
+    "q05": -0.4230132956538,
+    "q50": 0.0029925980834377697,
+    "q95": 0.4253025482983503
+  },
+  "hold_one_alignment": {
+    "count": 999.0,
+    "rmse": 0.13039883937919233,
+    "mae": 0.1073371142985317,
+    "mean_error": -0.003150253701505107
+  }
+}

@@ -213,6 +213,43 @@ The original Gaussian innovation model still looks broadly plausible at short
 horizons, but it appears slightly under-dispersed once the full observable book
 data is aggregated, especially around `20`-tick returns.
 
+## All-Data Innovation Fit From Visible Quotes
+
+The observable-space return check above is useful for validation, but it is not
+the right way to estimate the latent innovation term itself because the midpoint
+proxy is quantized. To estimate the innovation scale from all available data, I
+fit a 1D linear-Gaussian state-space model directly to the full visible osmium
+book:
+
+- latent state: `fv_next = 10000 + 0.99 * (fv - 10000) + eps`
+- observation on each tick: midpoint of the feasible visible-book FV interval
+- observation variance: `width^2 / 12`, treating the feasible interval as a
+  uniform measurement band
+
+This uses all `29,199` visible ticks with a non-empty feasible interval across
+days `-2`, `-1`, and `0`, rather than just the `999`-point hold-one latent
+sample.
+
+With `mu = 10000` and `phi = 0.99` fixed, the exact Kalman likelihood MLE is:
+
+```python
+eps_t ~ Normal(0, 0.320665^2)
+```
+
+So the all-data visible-book fit nudges the innovation scale slightly upward
+from the hold-one estimate (`0.3107` -> `0.3207`), but it does not support a
+large change.
+
+Sanity check versus the day-0 hold-one hidden path:
+
+- smoothing RMSE on the overlapping `999` points: `0.1304`
+- smoothing MAE: `0.1073`
+- mean error: `-0.0032`
+
+This is the strongest current estimate of the osmium innovation term because it
+uses essentially all the visible osmium data while modeling the latent process
+directly instead of fitting a quantized proxy.
+
 ## Visible-Book Validation
 
 Using the visible osmium quotes alone, the inner and outer layers identify a

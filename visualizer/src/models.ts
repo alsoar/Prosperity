@@ -236,6 +236,89 @@ export interface MonteCarloGeneratorModel {
   notes: string[];
 }
 
+export interface MonteCarloTailRiskSummary {
+  p05: number;
+  cvar95: number;
+  p01: number;
+  cvar99: number;
+}
+
+export interface MonteCarloRobustScenario {
+  id: string;
+  phi: number;
+  sigma: number;
+  calibrationScore: number;
+  confidenceStatistic: number;
+  relativeWeight: number;
+  normalizedWeight: number;
+  accepted: boolean;
+  totalPnl: MonteCarloDistributionStats;
+  emeraldPnl: MonteCarloDistributionStats;
+  tomatoPnl: MonteCarloDistributionStats;
+  tailRisk: {
+    totalPnl: MonteCarloTailRiskSummary;
+    emeraldPnl: MonteCarloTailRiskSummary;
+    tomatoPnl: MonteCarloTailRiskSummary;
+  };
+}
+
+export interface MonteCarloRobustPoint {
+  id: string;
+  phi: number;
+  sigma: number;
+  calibrationScore: number;
+  confidenceStatistic: number;
+  relativeWeight: number;
+  withinConfidenceRegion: boolean;
+  accepted: boolean;
+  normalizedWeight: number;
+  meanTotalPnl: number | null;
+  p05TotalPnl: number | null;
+  cvar95TotalPnl: number | null;
+}
+
+export interface MonteCarloRobustResults {
+  enabled: boolean;
+  grid: {
+    phiValues: number[];
+    sigmaValues: number[];
+    calibrationPaths: number;
+    confidenceLevel: number;
+    confidenceCutoff: number;
+    degreesOfFreedom: number;
+    maxScenarios: number;
+    acceptedCount: number;
+    totalCount: number;
+  };
+  acceptedScenarios: MonteCarloRobustScenario[];
+  allScenarios: MonteCarloRobustPoint[];
+  weightedMixture: {
+    totalPnl: MonteCarloDistributionStats;
+    emeraldPnl: MonteCarloDistributionStats;
+    tomatoPnl: MonteCarloDistributionStats;
+    tailRisk: {
+      totalPnl: MonteCarloTailRiskSummary;
+      emeraldPnl: MonteCarloTailRiskSummary;
+      tomatoPnl: MonteCarloTailRiskSummary;
+    };
+  };
+  p05Distributions: {
+    totalPnl: MonteCarloDistributionStats;
+    emeraldPnl: MonteCarloDistributionStats;
+    tomatoPnl: MonteCarloDistributionStats;
+  };
+  p05Histograms: {
+    totalPnl: MonteCarloHistogram;
+    emeraldPnl: MonteCarloHistogram;
+    tomatoPnl: MonteCarloHistogram;
+  };
+  worstCase: {
+    totalP05: MonteCarloRobustScenario;
+    totalMean: MonteCarloRobustScenario;
+  };
+  bestFit: MonteCarloRobustScenario;
+}
+
 export interface MonteCarloDashboard {
   kind: 'monte_carlo_dashboard';
   meta: {
@@ -247,6 +330,10 @@ export interface MonteCarloDashboard {
     seed: number;
     sampleSessions: number;
     bandSessionCount?: number;
+    productLabels?: Record<string, string>;
+    osmiumPhi?: number;
+    osmiumSigma?: number;
+    droEnabled?: boolean;
   };
   overall: {
     totalPnl: MonteCarloDistributionStats;
@@ -263,6 +350,11 @@ export interface MonteCarloDashboard {
   };
   scatterFit: MonteCarloScatterFit;
   generatorModel: Record<string, MonteCarloGeneratorModel>;
+  tailRisk?: {
+    totalPnl: MonteCarloTailRiskSummary;
+    emeraldPnl: MonteCarloTailRiskSummary;
+    tomatoPnl: MonteCarloTailRiskSummary;
+  };
   products: Record<
     string,
     {
@@ -280,6 +372,7 @@ export interface MonteCarloDashboard {
   samplePathRefs?: MonteCarloSamplePathRef[];
   bandChartRefs?: Record<string, MonteCarloStaticChartRef[]>;
   bandSeries?: Record<string, Record<string, MonteCarloBandSeries>>;
+  robust?: MonteCarloRobustResults;
 }
 
 export type CompressedListing = [symbol: ProsperitySymbol, product: Product, denomination: Product];

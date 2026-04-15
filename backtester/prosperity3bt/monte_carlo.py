@@ -11,8 +11,61 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+import numpy as np
 
-DAY_OFFSETS = {-2: 0, -1: 1_000_000}
+
+DAY_OFFSETS = {-2: 0, -1: 1_000_000, 0: 2_000_000}
+LEGACY_PRODUCT_KEYS = {
+    "ASH_COATED_OSMIUM": "EMERALDS",
+    "INTARIAN_PEPPER_ROOT": "TOMATOES",
+}
+PRODUCT_LABELS = {
+    "EMERALDS": "ASH_COATED_OSMIUM",
+    "TOMATOES": "INTARIAN_PEPPER_ROOT",
+}
+ROUND1_GENERATOR_MODELS = {
+    "EMERALDS": {
+        "name": "Float32 Mean-Reverting OU",
+        "formula": "x_{t+1} = f32(10000 + 0.99778 * (x_t - 10000) + ε_t), ε_t ~ N(0, 0.312^2)",
+        "notes": [
+            "Calibrated to the round-1 osmium proxy with float32 quantization and replay-anchored day starts.",
+            "Visible book uses empirical visibility masks with outer ±10, inner ±8, and a one-sided near bot around ±2.",
+        ],
+    },
+    "TOMATOES": {
+        "name": "Deterministic Day Ramp",
+        "formula": "FV(day, t) = f32(12000 + 1000 * day + timestamp / 1000)",
+        "notes": [
+            "Round-1 pepper root fair value is deterministic once day and timestamp are fixed.",
+            "Visible book uses calibrated mask frequencies with outer ±10, inner ±7, and an empirical one-sided near bot.",
+        ],
+    },
+}
+OSMIUM_MU = 10_000.0
+OSMIUM_PRODUCT = "ASH_COATED_OSMIUM"
+DRO_HORIZONS = (5, 10, 20, 30, 100)
+DRO_FEATURE_SPECS = (
+    (5, "std", 1.5),
+    (5, "q05", 1.0),
+    (5, "q50", 0.4),
+    (5, "q95", 1.0),
+    (10, "std", 1.7),
+    (10, "q05", 1.1),
+    (10, "q50", 0.5),
+    (10, "q95", 1.1),
+    (20, "std", 2.0),
+    (20, "q05", 1.4),
+    (20, "q50", 0.6),
+    (20, "q95", 1.4),
+    (30, "std", 1.9),
+    (30, "q05", 1.2),
+    (30, "q50", 0.5),
+    (30, "q95", 1.2),
+    (100, "std", 1.4),
+    (100, "q05", 0.9),
+    (100, "q50", 0.4),
+    (100, "q95", 0.9),
+)
 CHART_POINTS_PER_SERIES = 1500
 STATIC_CHART_POINTS = 600
 GENERATED_OUTPUT_FILES = {
@@ -55,18 +108,538 @@ def normalize_dashboard_path(out: Optional[Path], no_out: bool) -> Optional[Path
 
 
 def resolve_actual_dir(data_root: Optional[Path]) -> Path:
-    if data_root is None:
-        return project_root() / "data" / "round0"
+    default_round1 = project_root().parent / "prosperity-analysis" / "hidden_trader_detector" / "data" / "imc_round1" / "round1"
 
-    if data_root.name == "round0":
+    if data_root is None:
+        return default_round1
+
+    if data_root.name == "round1":
         return data_root
 
-    round0 = data_root / "round0"
-    if round0.is_dir():
-        return round0
+    round1 = data_root / "round1"
+    if round1.is_dir():
+        return round1
+
+    nested_round1 = data_root / "imc_round1" / "round1"
+    if nested_round1.is_dir():
+        return nested_round1
 
     return data_root
 
+
+def product_key(product: str) -> str:
+    return LEGACY_PRODUCT_KEYS.get(product, product)
+
+
+def product_label(product: str) -> str:
+    return PRODUCT_LABELS.get(product, product)
+
+
+def session_round_files(session_dir: Path) -> tuple[Path, str, str]:
+    round1_dir = session_dir / "round1"
+    if round1_dir.is_dir():
+        return round1_dir, "trace_round_1_day_*.csv", "round_1"
+
+    round0_dir = session_dir / "round0"
+    if round0_dir.is_dir():
+        return round0_dir, "trace_round_0_day_*.csv", "round_0"
+
+    raise FileNotFoundError(f"No round output directory found in {session_dir}")
+
+
+def osmium_scenario_id(phi: float, sigma: float) -> str:
+    def format_part(value: float) -> str:
+        text = f"{value:.6f}".replace("-", "m").replace(".", "p")
+        return text.rstrip("0").rstrip("p")
+
+    return f"phi_{format_part(phi)}__sigma_{format_part(sigma)}"
+
+
+def parse_optional_int(value: str | None) -> int | None:
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def weighted_quantile(values: list[float], weights: list[float], q: float) -> float:
+    if not values or not weights:
+        return float("nan")
+
+    order = sorted(range(len(values)), key=lambda index: values[index])
+    sorted_values = [values[index] for index in order]
+    sorted_weights = [weights[index] for index in order]
+    total_weight = sum(sorted_weights)
+    if total_weight <= 0:
+        return float("nan")
+
+    threshold = q * total_weight
+    cumulative = 0.0
+    for value, weight in zip(sorted_values, sorted_weights):
+        cumulative += weight
+        if cumulative >= threshold:
+            return value
+    return sorted_values[-1]
+
+
+def weighted_tail_mean(values: list[float], weights: list[float], tail_probability: float) -> float:
+    if not values or not weights:
+        return float("nan")
+
+    order = sorted(range(len(values)), key=lambda index: values[index])
+    sorted_values = [values[index] for index in order]
+    sorted_weights = [weights[index] for index in order]
+    total_weight = sum(sorted_weights)
+    if total_weight <= 0:
+        return float("nan")
+
+    target_weight = tail_probability * total_weight
+    if target_weight <= 0:
+        return sorted_values[0]
+
+    consumed = 0.0
+    tail_sum = 0.0
+    for value, weight in zip(sorted_values, sorted_weights):
+        if consumed >= target_weight:
+            break
+        take = min(weight, target_weight - consumed)
+        tail_sum += value * take
+        consumed += take
+
+    if consumed <= 0:
+        return sorted_values[0]
+    return tail_sum / consumed
+
+
+def summarize_weighted_distribution(values: list[float], weights: list[float]) -> dict[str, float]:
+    if not values or not weights:
+        return {}
+
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        return {}
+
+    mean = sum(value * weight for value, weight in zip(values, weights)) / total_weight
+    variance = sum(weight * (value - mean) ** 2 for value, weight in zip(values, weights)) / total_weight
+    std = math.sqrt(max(variance, 0.0))
+    downside = math.sqrt(sum(weight * min(value, 0.0) ** 2 for value, weight in zip(values, weights)) / total_weight)
+    q01 = weighted_quantile(values, weights, 0.01)
+    q05 = weighted_quantile(values, weights, 0.05)
+
+    return {
+        "count": float(len(values)),
+        "mean": mean,
+        "std": std,
+        "min": min(values),
+        "p01": q01,
+        "p05": q05,
+        "p10": weighted_quantile(values, weights, 0.10),
+        "p25": weighted_quantile(values, weights, 0.25),
+        "p50": weighted_quantile(values, weights, 0.50),
+        "p75": weighted_quantile(values, weights, 0.75),
+        "p90": weighted_quantile(values, weights, 0.90),
+        "p95": weighted_quantile(values, weights, 0.95),
+        "p99": weighted_quantile(values, weights, 0.99),
+        "max": max(values),
+        "positiveRate": sum(weight for value, weight in zip(values, weights) if value > 0) / total_weight,
+        "negativeRate": sum(weight for value, weight in zip(values, weights) if value < 0) / total_weight,
+        "zeroRate": sum(weight for value, weight in zip(values, weights) if value == 0) / total_weight,
+        "var95": q05,
+        "cvar95": weighted_tail_mean(values, weights, 0.05),
+        "var99": q01,
+        "cvar99": weighted_tail_mean(values, weights, 0.01),
+        "meanConfidenceLow95": mean - 1.96 * std,
+        "meanConfidenceHigh95": mean + 1.96 * std,
+        "sharpeLike": mean / std if std > 0 else 0.0,
+        "sortinoLike": mean / downside if downside > 0 else 0.0,
+        "skewness": 0.0 if std <= 0 else sum(weight * ((value - mean) / std) ** 3 for value, weight in zip(values, weights)) / total_weight,
+    }
+
+
+def approximate_chi_square_cutoff(confidence_level: float, degrees_of_freedom: int) -> float:
+    if degrees_of_freedom <= 0:
+        return 0.0
+    confidence_level = min(max(confidence_level, 1e-6), 1.0 - 1e-6)
+    z_value = statistics.NormalDist().inv_cdf(confidence_level)
+    base = 1.0 - 2.0 / (9.0 * degrees_of_freedom) + z_value * math.sqrt(2.0 / (9.0 * degrees_of_freedom))
+    return max(degrees_of_freedom * (base ** 3), 0.0)
+
+
+def infer_osmium_interval(row: dict[str, str]) -> tuple[float, float, float, tuple[bool, bool, bool, bool], int] | None:
+    bid_levels = [
+        (price, volume)
+        for idx in (1, 2, 3)
+        for price, volume in [(
+            parse_optional_int(row.get(f"bid_price_{idx}")),
+            parse_optional_int(row.get(f"bid_volume_{idx}")),
+        )]
+        if price is not None and volume is not None
+    ]
+    ask_levels = [
+        (price, volume)
+        for idx in (1, 2, 3)
+        for price, volume in [(
+            parse_optional_int(row.get(f"ask_price_{idx}")),
+            parse_optional_int(row.get(f"ask_volume_{idx}")),
+        )]
+        if price is not None and volume is not None
+    ]
+
+    bid_assignments: list[tuple[int | None, int | None]] = []
+    for inner in [None, *range(len(bid_levels))]:
+        for outer in [None, *range(len(bid_levels))]:
+            if inner is not None and outer is not None and inner == outer:
+                continue
+            if inner is not None and not (10 <= bid_levels[inner][1] <= 15):
+                continue
+            if outer is not None and not (20 <= bid_levels[outer][1] <= 30):
+                continue
+            if inner is not None and outer is not None and bid_levels[inner][0] <= bid_levels[outer][0]:
+                continue
+            bid_assignments.append((inner, outer))
+
+    ask_assignments: list[tuple[int | None, int | None]] = []
+    for inner in [None, *range(len(ask_levels))]:
+        for outer in [None, *range(len(ask_levels))]:
+            if inner is not None and outer is not None and inner == outer:
+                continue
+            if inner is not None and not (10 <= ask_levels[inner][1] <= 15):
+                continue
+            if outer is not None and not (20 <= ask_levels[outer][1] <= 30):
+                continue
+            if inner is not None and outer is not None and ask_levels[inner][0] >= ask_levels[outer][0]:
+                continue
+            ask_assignments.append((inner, outer))
+
+    best: tuple[tuple[float, int], tuple[float, float, float, tuple[bool, bool, bool, bool], int]] | None = None
+    for bid_inner, bid_outer in bid_assignments:
+        for ask_inner, ask_outer in ask_assignments:
+            lower = float("-inf")
+            upper = float("inf")
+            used = 0
+
+            if bid_inner is not None:
+                price = bid_levels[bid_inner][0]
+                lower = max(lower, price + 7.5)
+                upper = min(upper, price + 8.5)
+                used += 1
+            if bid_outer is not None:
+                price = bid_levels[bid_outer][0]
+                lower = max(lower, price + 10.0)
+                upper = min(upper, price + 11.0)
+                used += 1
+            if ask_inner is not None:
+                price = ask_levels[ask_inner][0]
+                lower = max(lower, price - 8.5)
+                upper = min(upper, price - 7.5)
+                used += 1
+            if ask_outer is not None:
+                price = ask_levels[ask_outer][0]
+                lower = max(lower, price - 11.0)
+                upper = min(upper, price - 10.0)
+                used += 1
+
+            if used < 2 or lower >= upper:
+                continue
+
+            width = upper - lower
+            score = (width, -used)
+            payload = (
+                lower,
+                upper,
+                0.5 * (lower + upper),
+                (bid_inner is not None, bid_outer is not None, ask_inner is not None, ask_outer is not None),
+                used,
+            )
+            if best is None or score < best[0]:
+                best = (score, payload)
+
+    return None if best is None else best[1]
+
+
+def round1_price_stub(actual_dir: Path) -> str:
+    if any(actual_dir.glob("prices_round_1_day_*.csv")):
+        return "round_1"
+    if any(actual_dir.glob("prices_round_0_day_*.csv")):
+        return "round_0"
+    raise FileNotFoundError(f"Could not find round price files in {actual_dir}")
+
+
+def load_osmium_observable_proxy(actual_dir: Path) -> dict[str, Any]:
+    round_stub = round1_price_stub(actual_dir)
+    day_paths = sorted(actual_dir.glob(f"prices_{round_stub}_day_*.csv"))
+    by_day: dict[int, dict[str, Any]] = {}
+
+    for path in day_paths:
+        day = int(path.stem.split("_")[-1])
+        rows = [row for row in read_csv_dicts(path, ";") if row.get("product") == OSMIUM_PRODUCT]
+        rows.sort(key=lambda row: int(row["timestamp"]))
+
+        midpoint = np.full(len(rows), np.nan, dtype=np.float64)
+        strong = np.zeros(len(rows), dtype=bool)
+        masks = np.zeros((len(rows), 4), dtype=bool)
+        timestamps = np.array([int(row["timestamp"]) for row in rows], dtype=np.int32)
+
+        for index, row in enumerate(rows):
+            interval = infer_osmium_interval(row)
+            if interval is None:
+                continue
+            lower, upper, candidate_midpoint, mask, _ = interval
+            masks[index] = mask
+            if math.isclose(upper - lower, 0.5, abs_tol=1e-9):
+                midpoint[index] = candidate_midpoint
+                strong[index] = True
+
+        by_day[day] = {
+            "timestamps": timestamps,
+            "midpoint": midpoint,
+            "strong": strong,
+            "masks": masks,
+        }
+
+    return {
+        "days": sorted(by_day),
+        "byDay": by_day,
+    }
+
+
+def simulate_osmium_paths(day: int, n_ticks: int, n_paths: int, phi: float, sigma: float, seed: int) -> np.ndarray:
+    if n_ticks <= 0 or n_paths <= 0:
+        return np.empty((n_paths, n_ticks), dtype=np.float64)
+
+    rng = np.random.default_rng(seed)
+    paths = np.empty((n_paths, n_ticks), dtype=np.float32)
+    start = np.float32({-2: 10000.25, -1: 9992.25, 0: 10002.75}.get(day, OSMIUM_MU))
+    paths[:, 0] = start
+    for index in range(1, n_ticks):
+        shocks = rng.normal(0.0, sigma, size=n_paths)
+        updated = OSMIUM_MU + phi * (paths[:, index - 1].astype(np.float64) - OSMIUM_MU) + shocks
+        paths[:, index] = updated.astype(np.float32)
+    return paths.astype(np.float64)
+
+
+def midpoint_from_masked_quotes(fv_values: np.ndarray, mask: tuple[bool, bool, bool, bool]) -> tuple[np.ndarray, np.ndarray]:
+    lower = np.full(len(fv_values), -1e18, dtype=np.float64)
+    upper = np.full(len(fv_values), 1e18, dtype=np.float64)
+    used = 0
+
+    if mask[0]:
+        price = np.rint(fv_values).astype(np.int32) - 8
+        lower = np.maximum(lower, price + 7.5)
+        upper = np.minimum(upper, price + 8.5)
+        used += 1
+    if mask[1]:
+        price = np.floor(fv_values).astype(np.int32) - 10
+        lower = np.maximum(lower, price + 10.0)
+        upper = np.minimum(upper, price + 11.0)
+        used += 1
+    if mask[2]:
+        price = np.rint(fv_values).astype(np.int32) + 8
+        lower = np.maximum(lower, price - 8.5)
+        upper = np.minimum(upper, price - 7.5)
+        used += 1
+    if mask[3]:
+        price = np.ceil(fv_values).astype(np.int32) + 10
+        lower = np.maximum(lower, price - 11.0)
+        upper = np.minimum(upper, price - 10.0)
+        used += 1
+
+    valid = (used >= 2) & (lower <= upper)
+    midpoint = np.full(len(fv_values), np.nan, dtype=np.float64)
+    midpoint[valid] = 0.5 * (lower[valid] + upper[valid])
+    return midpoint, valid
+
+
+def build_simulated_observable_proxy(simulated_fv: np.ndarray, masks: np.ndarray, strong: np.ndarray) -> np.ndarray:
+    sessions, ticks = simulated_fv.shape
+    proxy = np.full((sessions, ticks), np.nan, dtype=np.float64)
+    for index in np.flatnonzero(strong):
+        midpoint, valid = midpoint_from_masked_quotes(simulated_fv[:, index], tuple(bool(value) for value in masks[index]))
+        proxy[valid, index] = midpoint[valid]
+    return proxy
+
+
+def collect_non_overlapping_returns(midpoint: np.ndarray, valid: np.ndarray, horizon: int) -> np.ndarray:
+    if len(midpoint) <= horizon:
+        return np.empty(0, dtype=np.float64)
+    starts = np.arange(0, len(midpoint) - horizon, horizon, dtype=np.int32)
+    keep = valid[starts] & valid[starts + horizon]
+    if not np.any(keep):
+        return np.empty(0, dtype=np.float64)
+    return midpoint[starts[keep] + horizon] - midpoint[starts[keep]]
+
+
+def collect_simulated_non_overlapping_returns(midpoint: np.ndarray, strong: np.ndarray, horizon: int) -> np.ndarray:
+    if midpoint.shape[1] <= horizon:
+        return np.empty((midpoint.shape[0], 0), dtype=np.float64)
+    starts = np.arange(0, midpoint.shape[1] - horizon, horizon, dtype=np.int32)
+    keep = strong[starts] & strong[starts + horizon]
+    if not np.any(keep):
+        return np.empty((midpoint.shape[0], 0), dtype=np.float64)
+    selected_starts = starts[keep]
+    valid = np.all(np.isfinite(midpoint[:, selected_starts]), axis=0)
+    valid &= np.all(np.isfinite(midpoint[:, selected_starts + horizon]), axis=0)
+    selected_starts = selected_starts[valid]
+    if len(selected_starts) == 0:
+        return np.empty((midpoint.shape[0], 0), dtype=np.float64)
+    return midpoint[:, selected_starts + horizon] - midpoint[:, selected_starts]
+
+
+def np_quantile(values: np.ndarray, q: float) -> float:
+    if values.size == 0:
+        return float("nan")
+    return float(np.quantile(values, q))
+
+
+def summarize_return_family(returns: np.ndarray) -> dict[str, np.ndarray]:
+    if returns.size == 0:
+        return {
+            "std": np.empty(0, dtype=np.float64),
+            "q05": np.empty(0, dtype=np.float64),
+            "q50": np.empty(0, dtype=np.float64),
+            "q95": np.empty(0, dtype=np.float64),
+        }
+
+    return {
+        "std": np.std(returns, axis=1),
+        "q05": np.quantile(returns, 0.05, axis=1),
+        "q50": np.quantile(returns, 0.50, axis=1),
+        "q95": np.quantile(returns, 0.95, axis=1),
+    }
+
+
+def calibrate_osmium_parameter_family(
+    actual_dir: Path,
+    phi_values: list[float],
+    sigma_values: list[float],
+    calibration_paths: int,
+    seed: int,
+    confidence_level: float,
+    max_scenarios: int,
+) -> dict[str, Any]:
+    observable = load_osmium_observable_proxy(actual_dir)
+    empirical_returns: dict[int, np.ndarray] = {}
+    empirical_stats: dict[int, dict[str, float]] = {}
+
+    for horizon in DRO_HORIZONS:
+        day_returns: list[np.ndarray] = []
+        for day in observable["days"]:
+            day_data = observable["byDay"][day]
+            returns = collect_non_overlapping_returns(day_data["midpoint"], day_data["strong"], horizon)
+            if returns.size > 0:
+                day_returns.append(returns)
+        combined = np.concatenate(day_returns) if day_returns else np.empty(0, dtype=np.float64)
+        empirical_returns[horizon] = combined
+        empirical_stats[horizon] = {
+            "std": float(np.std(combined)) if combined.size > 0 else float("nan"),
+            "q05": np_quantile(combined, 0.05),
+            "q50": np_quantile(combined, 0.50),
+            "q95": np_quantile(combined, 0.95),
+        }
+
+    scenario_rows: list[dict[str, Any]] = []
+    for sigma_index, sigma in enumerate(sigma_values):
+        for phi_index, phi in enumerate(phi_values):
+            simulated_returns_by_horizon: dict[int, list[np.ndarray]] = {horizon: [] for horizon in DRO_HORIZONS}
+            scenario_seed = seed + sigma_index * 10_000 + phi_index * 101
+
+            for day_index, day in enumerate(observable["days"]):
+                day_data = observable["byDay"][day]
+                simulated_fv = simulate_osmium_paths(
+                    day=day,
+                    n_ticks=len(day_data["timestamps"]),
+                    n_paths=calibration_paths,
+                    phi=phi,
+                    sigma=sigma,
+                    seed=scenario_seed + day_index,
+                )
+                simulated_proxy = build_simulated_observable_proxy(simulated_fv, day_data["masks"], day_data["strong"])
+                for horizon in DRO_HORIZONS:
+                    day_returns = collect_simulated_non_overlapping_returns(simulated_proxy, day_data["strong"], horizon)
+                    if day_returns.size > 0:
+                        simulated_returns_by_horizon[horizon].append(day_returns)
+
+            score = 0.0
+            diagnostics: list[dict[str, float | int | str]] = []
+            for horizon, metric, weight in DRO_FEATURE_SPECS:
+                pieces = simulated_returns_by_horizon[horizon]
+                if not pieces or empirical_returns[horizon].size == 0:
+                    continue
+                simulated_returns = np.concatenate(pieces, axis=1)
+                summary = summarize_return_family(simulated_returns)
+                simulated_metric = summary[metric]
+                if simulated_metric.size == 0:
+                    continue
+                actual_value = empirical_stats[horizon][metric]
+                simulated_mean = float(np.mean(simulated_metric))
+                simulated_std = float(np.std(simulated_metric, ddof=1)) if simulated_metric.size > 1 else 0.0
+                scale = max(simulated_std, 1e-6)
+                z_score = (actual_value - simulated_mean) / scale
+                score += weight * z_score * z_score
+                diagnostics.append(
+                    {
+                        "horizon": horizon,
+                        "metric": metric,
+                        "weight": weight,
+                        "actual": actual_value,
+                        "simMean": simulated_mean,
+                        "simStd": simulated_std,
+                        "zScore": z_score,
+                    }
+                )
+
+            scenario_rows.append(
+                {
+                    "id": osmium_scenario_id(phi, sigma),
+                    "phi": phi,
+                    "sigma": sigma,
+                    "calibrationScore": score,
+                    "diagnostics": diagnostics,
+                }
+            )
+
+    if not scenario_rows:
+        return {
+            "phiValues": phi_values,
+            "sigmaValues": sigma_values,
+            "points": [],
+            "accepted": [],
+        }
+
+    degrees_of_freedom = len(DRO_FEATURE_SPECS)
+    confidence_cutoff = approximate_chi_square_cutoff(confidence_level, degrees_of_freedom)
+
+    for row in scenario_rows:
+        confidence_statistic = sum(float(diagnostic["zScore"]) ** 2 for diagnostic in row["diagnostics"])
+        row["confidenceStatistic"] = confidence_statistic
+        row["withinConfidenceRegion"] = confidence_statistic <= confidence_cutoff
+        row["relativeWeight"] = math.exp(-0.5 * confidence_statistic)
+
+    accepted = sorted(
+        [row for row in scenario_rows if row["withinConfidenceRegion"]],
+        key=lambda row: (row["confidenceStatistic"], row["calibrationScore"], row["phi"], row["sigma"]),
+    )[:max_scenarios]
+
+    if not accepted:
+        accepted = [min(scenario_rows, key=lambda row: row["confidenceStatistic"])]
+
+    accepted_weight_sum = sum(row["relativeWeight"] for row in accepted)
+    for row in scenario_rows:
+        row["accepted"] = any(row["id"] == accepted_row["id"] for accepted_row in accepted)
+    for row in accepted:
+        row["normalizedWeight"] = row["relativeWeight"] / accepted_weight_sum if accepted_weight_sum > 0 else 0.0
+
+    return {
+        "phiValues": phi_values,
+        "sigmaValues": sigma_values,
+        "empiricalStats": empirical_stats,
+        "points": scenario_rows,
+        "accepted": accepted,
+        "confidenceLevel": confidence_level,
+        "confidenceCutoff": confidence_cutoff,
+        "degreesOfFreedom": degrees_of_freedom,
+        "maxScenarios": max_scenarios,
+        "calibrationPaths": calibration_paths,
+    }
 
 def quantile(values: list[float], q: float) -> float:
     if not values:
@@ -367,21 +940,225 @@ def load_run_summaries(output_dir: Path) -> list[dict[str, Any]]:
     return parsed
 
 
+def build_tail_risk_summary(total: dict[str, float], emerald: dict[str, float], tomato: dict[str, float]) -> dict[str, dict[str, float]]:
+    return {
+        "totalPnl": {
+            "p05": total.get("p05", 0.0),
+            "cvar95": total.get("cvar95", 0.0),
+            "p01": total.get("p01", 0.0),
+            "cvar99": total.get("cvar99", 0.0),
+        },
+        "emeraldPnl": {
+            "p05": emerald.get("p05", 0.0),
+            "cvar95": emerald.get("cvar95", 0.0),
+            "p01": emerald.get("p01", 0.0),
+            "cvar99": emerald.get("cvar99", 0.0),
+        },
+        "tomatoPnl": {
+            "p05": tomato.get("p05", 0.0),
+            "cvar95": tomato.get("cvar95", 0.0),
+            "p01": tomato.get("p01", 0.0),
+            "cvar99": tomato.get("cvar99", 0.0),
+        },
+    }
+
+
+def summarize_output_dir(output_dir: Path) -> dict[str, Any]:
+    session_rows = load_session_summaries(output_dir)
+    run_rows = load_run_summaries(output_dir)
+
+    total = [row["totalPnl"] for row in session_rows]
+    emerald = [row["emeraldPnl"] for row in session_rows]
+    tomato = [row["tomatoPnl"] for row in session_rows]
+    total_stats = summarize_distribution(total)
+    emerald_stats = summarize_distribution(emerald)
+    tomato_stats = summarize_distribution(tomato)
+
+    return {
+        "sessionRows": session_rows,
+        "runRows": run_rows,
+        "totalPnl": total_stats,
+        "emeraldPnl": emerald_stats,
+        "tomatoPnl": tomato_stats,
+        "tailRisk": build_tail_risk_summary(total_stats, emerald_stats, tomato_stats),
+    }
+
+
+def robust_scenario_payload(
+    row: dict[str, Any],
+    summary: dict[str, Any],
+    normalized_weight: float,
+) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "phi": row["phi"],
+        "sigma": row["sigma"],
+        "calibrationScore": row["calibrationScore"],
+        "confidenceStatistic": row["confidenceStatistic"],
+        "relativeWeight": row["relativeWeight"],
+        "normalizedWeight": normalized_weight,
+        "accepted": True,
+        "totalPnl": summary["totalPnl"],
+        "emeraldPnl": summary["emeraldPnl"],
+        "tomatoPnl": summary["tomatoPnl"],
+        "tailRisk": summary["tailRisk"],
+    }
+
+
+def aggregate_robust_results(
+    calibration: dict[str, Any],
+    output_dir: Path,
+    base_summary: dict[str, Any],
+    base_phi: float,
+    base_sigma: float,
+    algorithm: Path,
+    data_root: Optional[Path],
+    sessions: int,
+    fv_mode: str,
+    trade_mode: str,
+    seed: int,
+    python_bin: str,
+    ticks_per_day: int,
+) -> dict[str, Any]:
+    scenarios_dir = output_dir / "dro_runs"
+    scenarios_dir.mkdir(parents=True, exist_ok=True)
+
+    accepted_payloads: list[dict[str, Any]] = []
+    p05_total_values: list[float] = []
+    p05_emerald_values: list[float] = []
+    p05_tomato_values: list[float] = []
+    weighted_total_values: list[float] = []
+    weighted_emerald_values: list[float] = []
+    weighted_tomato_values: list[float] = []
+    weighted_total_weights: list[float] = []
+    weighted_emerald_weights: list[float] = []
+    weighted_tomato_weights: list[float] = []
+
+    base_id = osmium_scenario_id(base_phi, base_sigma)
+
+    for accepted_row in calibration["accepted"]:
+        scenario_weight = accepted_row.get("normalizedWeight", 0.0)
+        if accepted_row["id"] == base_id and math.isclose(accepted_row["phi"], base_phi) and math.isclose(accepted_row["sigma"], base_sigma):
+            scenario_summary = base_summary
+        else:
+            scenario_dir = scenarios_dir / accepted_row["id"]
+            scenario_dir.mkdir(parents=True, exist_ok=True)
+            run_rust_monte_carlo(
+                algorithm=algorithm,
+                output_dir=scenario_dir,
+                data_root=data_root,
+                sessions=sessions,
+                fv_mode=fv_mode,
+                trade_mode=trade_mode,
+                osmium_phi=accepted_row["phi"],
+                osmium_sigma=accepted_row["sigma"],
+                seed=seed,
+                python_bin=python_bin,
+                sample_sessions=0,
+                ticks_per_day=ticks_per_day,
+            )
+            scenario_summary = summarize_output_dir(scenario_dir)
+
+        payload = robust_scenario_payload(accepted_row, scenario_summary, scenario_weight)
+        accepted_payloads.append(payload)
+        p05_total_values.append(payload["totalPnl"]["p05"])
+        p05_emerald_values.append(payload["emeraldPnl"]["p05"])
+        p05_tomato_values.append(payload["tomatoPnl"]["p05"])
+
+        sample_weight = scenario_weight / max(len(scenario_summary["sessionRows"]), 1)
+        for session_row in scenario_summary["sessionRows"]:
+            weighted_total_values.append(session_row["totalPnl"])
+            weighted_emerald_values.append(session_row["emeraldPnl"])
+            weighted_tomato_values.append(session_row["tomatoPnl"])
+            weighted_total_weights.append(sample_weight)
+            weighted_emerald_weights.append(sample_weight)
+            weighted_tomato_weights.append(sample_weight)
+
+    accepted_payloads.sort(key=lambda row: (-row["normalizedWeight"], row["calibrationScore"], row["phi"], row["sigma"]))
+    worst_case_p05 = min(accepted_payloads, key=lambda row: row["totalPnl"]["p05"])
+    worst_case_mean = min(accepted_payloads, key=lambda row: row["totalPnl"]["mean"])
+    best_fit = min(accepted_payloads, key=lambda row: row["calibrationScore"])
+
+    points = []
+    payload_by_id = {payload["id"]: payload for payload in accepted_payloads}
+    for point in calibration["points"]:
+        accepted_payload = payload_by_id.get(point["id"])
+        points.append(
+            {
+                "id": point["id"],
+                "phi": point["phi"],
+                "sigma": point["sigma"],
+                "calibrationScore": point["calibrationScore"],
+                "confidenceStatistic": point["confidenceStatistic"],
+                "relativeWeight": point["relativeWeight"],
+                "withinConfidenceRegion": point["withinConfidenceRegion"],
+                "accepted": point["accepted"],
+                "normalizedWeight": accepted_payload["normalizedWeight"] if accepted_payload is not None else 0.0,
+                "meanTotalPnl": accepted_payload["totalPnl"]["mean"] if accepted_payload is not None else None,
+                "p05TotalPnl": accepted_payload["totalPnl"]["p05"] if accepted_payload is not None else None,
+                "cvar95TotalPnl": accepted_payload["totalPnl"]["cvar95"] if accepted_payload is not None else None,
+            }
+        )
+
+    weighted_total = summarize_weighted_distribution(weighted_total_values, weighted_total_weights)
+    weighted_emerald = summarize_weighted_distribution(weighted_emerald_values, weighted_emerald_weights)
+    weighted_tomato = summarize_weighted_distribution(weighted_tomato_values, weighted_tomato_weights)
+
+    return {
+        "enabled": True,
+        "grid": {
+            "phiValues": calibration["phiValues"],
+            "sigmaValues": calibration["sigmaValues"],
+            "calibrationPaths": calibration["calibrationPaths"],
+            "confidenceLevel": calibration["confidenceLevel"],
+            "confidenceCutoff": calibration["confidenceCutoff"],
+            "degreesOfFreedom": calibration["degreesOfFreedom"],
+            "maxScenarios": calibration["maxScenarios"],
+            "acceptedCount": len(accepted_payloads),
+            "totalCount": len(calibration["points"]),
+        },
+        "acceptedScenarios": accepted_payloads,
+        "allScenarios": points,
+        "weightedMixture": {
+            "totalPnl": weighted_total,
+            "emeraldPnl": weighted_emerald,
+            "tomatoPnl": weighted_tomato,
+            "tailRisk": build_tail_risk_summary(weighted_total, weighted_emerald, weighted_tomato),
+        },
+        "p05Distributions": {
+            "totalPnl": summarize_distribution(p05_total_values),
+            "emeraldPnl": summarize_distribution(p05_emerald_values),
+            "tomatoPnl": summarize_distribution(p05_tomato_values),
+        },
+        "p05Histograms": {
+            "totalPnl": histogram(p05_total_values),
+            "emeraldPnl": histogram(p05_emerald_values),
+            "tomatoPnl": histogram(p05_tomato_values),
+        },
+        "worstCase": {
+            "totalP05": worst_case_p05,
+            "totalMean": worst_case_mean,
+        },
+        "bestFit": best_fit,
+    }
+
+
 def load_sample_session(session_dir: Path) -> dict[str, Any]:
-    round_dir = session_dir / "round0"
+    round_dir, trace_glob, round_stub = session_round_files(session_dir)
     traces_by_product: dict[str, dict[str, list[float]]] = {}
     prices_by_product: dict[str, dict[str, list[float]]] = {}
     day_files = sorted(
         int(path.stem.split("_")[-1])
-        for path in round_dir.glob("trace_round_0_day_*.csv")
+        for path in round_dir.glob(trace_glob)
     )
 
     for day_index, day in enumerate(day_files):
-        trace_rows = read_csv_dicts(round_dir / f"trace_round_0_day_{day}.csv", ";")
-        price_rows = read_csv_dicts(round_dir / f"prices_round_0_day_{day}.csv", ";")
+        trace_rows = read_csv_dicts(round_dir / f"trace_{round_stub}_day_{day}.csv", ";")
+        price_rows = read_csv_dicts(round_dir / f"prices_{round_stub}_day_{day}.csv", ";")
+        day_offset = DAY_OFFSETS.get(day, day_index * 1_000_000)
 
         for row in trace_rows:
-            product = row["product"]
+            product = product_key(row["product"])
             if product not in traces_by_product:
                 traces_by_product[product] = {
                     "timestamps": [],
@@ -390,7 +1167,7 @@ def load_sample_session(session_dir: Path) -> dict[str, Any]:
                     "cash": [],
                     "mtmPnl": [],
                 }
-            ts = day_index * 1_000_000 + int(row["timestamp"])
+            ts = day_offset + int(row["timestamp"])
             traces_by_product[product]["timestamps"].append(ts)
             traces_by_product[product]["fair"].append(float(row["fair_value"]))
             traces_by_product[product]["position"].append(int(row["position"]))
@@ -398,7 +1175,7 @@ def load_sample_session(session_dir: Path) -> dict[str, Any]:
             traces_by_product[product]["mtmPnl"].append(float(row["mtm_pnl"]))
 
         for row in price_rows:
-            product = row["product"]
+            product = product_key(row["product"])
             if product not in prices_by_product:
                 prices_by_product[product] = {
                     "timestamps": [],
@@ -406,7 +1183,7 @@ def load_sample_session(session_dir: Path) -> dict[str, Any]:
                     "bid1": [],
                     "ask1": [],
                 }
-            ts = day_index * 1_000_000 + int(row["timestamp"])
+            ts = day_offset + int(row["timestamp"])
             prices_by_product[product]["timestamps"].append(ts)
             prices_by_product[product]["mid"].append(float(row["mid_price"]))
             prices_by_product[product]["bid1"].append(
@@ -430,7 +1207,7 @@ def load_sample_session(session_dir: Path) -> dict[str, Any]:
             "mtmPnl": trace["mtmPnl"],
         }
 
-    timestamps = products["EMERALDS"]["timestamps"]
+    timestamps = products["EMERALDS"]["timestamps"] if "EMERALDS" in products else next(iter(products.values()))["timestamps"]
     total_pnl = []
     for idx in range(len(timestamps)):
         total_pnl.append(sum(products[product]["mtmPnl"][idx] for product in products))
@@ -686,6 +1463,7 @@ def write_static_chart_svgs(output_dir: Path, sampled_paths: list[dict[str, Any]
 
     refs: dict[str, list[dict[str, str]]] = {}
     for product, specs in chart_specs.items():
+        display_name = product_label(product)
         product_refs: list[dict[str, str]] = []
         product_dir = charts_dir / product.lower()
         product_dir.mkdir(parents=True, exist_ok=True)
@@ -693,7 +1471,7 @@ def write_static_chart_svgs(output_dir: Path, sampled_paths: list[dict[str, Any]
             bands = quantile_series(sampled_paths, getter)
             overlays = overlay_series(sampled_paths, getter)["overlays"]
             svg = path_chart_svg(
-                title=f"{product} {title}",
+                title=f"{display_name} {title}",
                 subtitle=f"{len(sampled_paths)} persisted session traces • overlays show first {min(10, len(overlays))} sessions",
                 timestamps=bands["timestamps"],
                 bands=bands,
@@ -772,6 +1550,9 @@ def build_dashboard(output_dir: Path, algorithm: Path, sessions: int, config: di
     total_normal_fit = normal_fit(total)
     emerald_normal_fit = normal_fit(emerald)
     tomato_normal_fit = normal_fit(tomato)
+    total_stats = summarize_distribution(total)
+    emerald_stats = summarize_distribution(emerald)
+    tomato_stats = summarize_distribution(tomato)
 
     return {
         "kind": "monte_carlo_dashboard",
@@ -779,12 +1560,13 @@ def build_dashboard(output_dir: Path, algorithm: Path, sessions: int, config: di
             "algorithmPath": str(algorithm),
             "sessionCount": sessions,
             "bandSessionCount": len(sample_session_dirs),
+            "productLabels": PRODUCT_LABELS,
             **config,
         },
         "overall": {
-            "totalPnl": summarize_distribution(total),
-            "emeraldPnl": summarize_distribution(emerald),
-            "tomatoPnl": summarize_distribution(tomato),
+            "totalPnl": total_stats,
+            "emeraldPnl": emerald_stats,
+            "tomatoPnl": tomato_stats,
             "emeraldTomatoCorrelation": correlation(emerald, tomato),
         },
         "trendFits": {
@@ -822,35 +1604,22 @@ def build_dashboard(output_dir: Path, algorithm: Path, sessions: int, config: di
         },
         "scatterFit": scatter_fit,
         "generatorModel": {
-            "EMERALDS": {
-                "name": "Fixed Fair Value",
-                "formula": "F_t = 10000",
-                "notes": [
-                    "No stochastic component",
-                    "Bots quote directly around the fixed fair value",
-                ],
-            },
-            "TOMATOES": {
-                "name": "Latent Fair Random Walk",
-                "formula": "x_{t+1} = x_t + ε_t",
-                "notes": [
-                    "Zero-drift latent fair process used by the quoting bots",
-                    "Visible book states emerge after deterministic quote rounding",
-                ],
-            },
+            "EMERALDS": ROUND1_GENERATOR_MODELS["EMERALDS"],
+            "TOMATOES": ROUND1_GENERATOR_MODELS["TOMATOES"],
         },
         "products": {
             "EMERALDS": {
-                "pnl": summarize_distribution(emerald),
+                "pnl": emerald_stats,
                 "finalPosition": summarize_distribution([float(value) for value in emerald_pos]),
                 "cash": summarize_distribution(emerald_cash),
             },
             "TOMATOES": {
-                "pnl": summarize_distribution(tomato),
+                "pnl": tomato_stats,
                 "finalPosition": summarize_distribution([float(value) for value in tomato_pos]),
                 "cash": summarize_distribution(tomato_cash),
             },
         },
+        "tailRisk": build_tail_risk_summary(total_stats, emerald_stats, tomato_stats),
         "histograms": {
             "totalPnl": histogram(total),
             "emeraldPnl": histogram(emerald),
@@ -880,7 +1649,8 @@ def run_rust_monte_carlo(
     sessions: int,
     fv_mode: str,
     trade_mode: str,
-    tomato_support: str,
+    osmium_phi: float,
+    osmium_sigma: float,
     seed: int,
     python_bin: str,
     sample_sessions: int,
@@ -908,8 +1678,10 @@ def run_rust_monte_carlo(
         fv_mode,
         "--trade-mode",
         trade_mode,
-        "--tomato-support",
-        tomato_support,
+        "--osmium-phi",
+        str(osmium_phi),
+        "--osmium-sigma",
+        str(osmium_sigma),
         "--seed",
         str(seed),
         "--python-bin",
@@ -932,11 +1704,22 @@ def run_monte_carlo_mode(
     sessions: int,
     fv_mode: str,
     trade_mode: str,
-    tomato_support: str,
+    osmium_phi: float,
+    osmium_sigma: float,
     seed: int,
     python_bin: str,
     sample_sessions: int,
     ticks_per_day: int = 10000,
+    dro: bool = False,
+    dro_phi_min: Optional[float] = None,
+    dro_phi_max: Optional[float] = None,
+    dro_phi_steps: int = 5,
+    dro_sigma_min: Optional[float] = None,
+    dro_sigma_max: Optional[float] = None,
+    dro_sigma_steps: int = 5,
+    dro_confidence: float = 0.90,
+    dro_calibration_paths: int = 96,
+    dro_max_scenarios: int = 9,
 ) -> dict[str, Any]:
     output_dir = dashboard_path.parent
     if output_dir.exists():
@@ -957,7 +1740,8 @@ def run_monte_carlo_mode(
         sessions=sessions,
         fv_mode=fv_mode,
         trade_mode=trade_mode,
-        tomato_support=tomato_support,
+        osmium_phi=osmium_phi,
+        osmium_sigma=osmium_sigma,
         seed=seed,
         python_bin=python_bin,
         sample_sessions=sample_sessions,
@@ -971,11 +1755,58 @@ def run_monte_carlo_mode(
         {
             "fvMode": fv_mode,
             "tradeMode": trade_mode,
-            "tomatoSupport": tomato_support,
+            "tomatoSupport": "deterministic",
+            "osmiumPhi": osmium_phi,
+            "osmiumSigma": osmium_sigma,
+            "droEnabled": dro,
             "seed": seed,
             "sampleSessions": sample_sessions,
         },
     )
+
+    if dro:
+        phi_min = max(0.0, dro_phi_min if dro_phi_min is not None else osmium_phi - 0.0015)
+        phi_max = min(0.99995, dro_phi_max if dro_phi_max is not None else osmium_phi + 0.0015)
+        sigma_min = max(0.05, dro_sigma_min if dro_sigma_min is not None else osmium_sigma - 0.06)
+        sigma_max = max(sigma_min, dro_sigma_max if dro_sigma_max is not None else osmium_sigma + 0.06)
+        phi_steps = max(dro_phi_steps, 1)
+        sigma_steps = max(dro_sigma_steps, 1)
+
+        phi_values = [float(value) for value in np.linspace(phi_min, phi_max, phi_steps)]
+        sigma_values = [float(value) for value in np.linspace(sigma_min, sigma_max, sigma_steps)]
+        if not any(math.isclose(value, osmium_phi, rel_tol=0.0, abs_tol=1e-9) for value in phi_values):
+            phi_values.append(float(osmium_phi))
+            phi_values.sort()
+        if not any(math.isclose(value, osmium_sigma, rel_tol=0.0, abs_tol=1e-9) for value in sigma_values):
+            sigma_values.append(float(osmium_sigma))
+            sigma_values.sort()
+
+        calibration = calibrate_osmium_parameter_family(
+            actual_dir=resolve_actual_dir(data_root),
+            phi_values=phi_values,
+            sigma_values=sigma_values,
+            calibration_paths=dro_calibration_paths,
+            seed=seed,
+            confidence_level=dro_confidence,
+            max_scenarios=dro_max_scenarios,
+        )
+        robust = aggregate_robust_results(
+            calibration=calibration,
+            output_dir=output_dir,
+            base_summary=summarize_output_dir(output_dir),
+            base_phi=osmium_phi,
+            base_sigma=osmium_sigma,
+            algorithm=algorithm,
+            data_root=data_root,
+            sessions=sessions,
+            fv_mode=fv_mode,
+            trade_mode=trade_mode,
+            seed=seed,
+            python_bin=python_bin,
+            ticks_per_day=ticks_per_day,
+        )
+        dashboard["robust"] = robust
+
     with dashboard_path.open("w", encoding="utf-8") as handle:
         json.dump(dashboard, handle, indent=2)
 

@@ -311,10 +311,15 @@ export function SummaryTable({ title, stats }: { title: string; stats: MonteCarl
 export function SessionRankingTable({
   title,
   rows,
+  productLabels,
 }: {
   title: string;
   rows: MonteCarloDashboard['sessions'];
+  productLabels?: Record<string, string>;
 }): ReactNode {
+  const emeraldLabel = productLabels?.EMERALDS ?? 'EMERALDS';
+  const tomatoLabel = productLabels?.TOMATOES ?? 'TOMATOES';
+
   return (
     <VisualizerCard title={title}>
       <Table striped withTableBorder withColumnBorders stickyHeader stickyHeaderOffset={0}>
@@ -322,8 +327,8 @@ export function SessionRankingTable({
           <Table.Tr>
             <Table.Th>Session</Table.Th>
             <Table.Th>Total</Table.Th>
-            <Table.Th>EMERALDS</Table.Th>
-            <Table.Th>TOMATOES</Table.Th>
+            <Table.Th>{emeraldLabel}</Table.Th>
+            <Table.Th>{tomatoLabel}</Table.Th>
             <Table.Th>Total $/step</Table.Th>
             <Table.Th>Total R²</Table.Th>
           </Table.Tr>
